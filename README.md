@@ -1,3 +1,13 @@
+---
+title: ParcelPilot Support Console
+emoji: 📦
+colorFrom: indigo
+colorTo: gray
+sdk: docker
+app_port: 8000
+pinned: false
+---
+
 # ParcelPilot AI Support System
 
 An AI support agent for ParcelPilot (B2B logistics), serving **two user contexts** over one
