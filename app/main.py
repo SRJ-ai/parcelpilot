@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from app.ingest import load_sqlite, DocIndex
 from app.auth import MOCK_SESSIONS
 from app.tools import ToolBox
-from app import agent, proactive
+from app import agent, proactive, obs
 
 load_dotenv()
 
@@ -90,8 +90,14 @@ class ConfirmIn(BaseModel):
 
 
 @app.middleware("http")
-async def security_headers(request: Request, call_next):
+async def security_and_logging(request: Request, call_next):
+    rid = obs.new_request_id()
+    start = time.time()
     resp = await call_next(request)
+    if request.url.path not in ("/health",) and not request.url.path.startswith("/static"):
+        obs.event("http", method=request.method, path=request.url.path,
+                  status=resp.status_code, ms=round((time.time() - start) * 1000))
+    resp.headers["X-Request-ID"] = rid
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "no-referrer"
@@ -144,6 +150,7 @@ def chat(inp: ChatIn):
     try:
         events, pending = agent.run(s["history"], ToolBox(CON, IDX, s["auth"]))
     except Exception as e:
+        obs.error("llm_failure", err=f"{type(e).__name__}: {e}")
         return JSONResponse({"error": f"The assistant is temporarily unavailable ({type(e).__name__}). Please retry."},
                             status_code=502)
     s["pending"] = pending
@@ -162,6 +169,7 @@ def confirm(inp: ConfirmIn):
     try:
         events, new_pending = agent.confirm(s["history"], ToolBox(CON, IDX, s["auth"]), pending, inp.approved)
     except Exception as e:
+        obs.error("llm_failure", err=f"{type(e).__name__}: {e}")
         return JSONResponse({"error": f"The assistant is temporarily unavailable ({type(e).__name__}). Please retry."},
                             status_code=502)
     s["pending"] = new_pending

@@ -8,7 +8,7 @@ so the guarantee holds even if the model forgets to ask.
 import json
 from app.config import SNAPSHOT_NOW
 from app.tools import ToolBox, WRITE_TOOLS, TOOL_SPECS
-from app import llm
+from app import llm, obs
 
 READ_TOOLS = {"search_documents", "lookup_data", "compute_policy_outcome"}
 MAX_STEPS = 8
@@ -83,6 +83,7 @@ def run(history, toolbox: ToolBox):
             except json.JSONDecodeError:
                 args = {}
             events.append({"type": "tool_call", "name": name, "label": _tool_summary(name, args)})
+            obs.event("tool_call", name=name, role=toolbox.auth.role)
 
             if name in READ_TOOLS:
                 result = getattr(toolbox, name)(**args)
@@ -109,8 +110,10 @@ def confirm(history, toolbox: ToolBox, pending: dict, approved: bool):
     """Resume after the user's confirm/cancel decision."""
     if approved:
         result = toolbox.commit_write(pending["name"], pending["args"])
+        obs.event("action_committed", action=pending["name"], ref=result.get("ref"), role=toolbox.auth.role)
     else:
         result = {"cancelled": True, "message": "User declined the action; do not perform it."}
+        obs.event("action_cancelled", action=pending["name"])
     history.append({"role": "tool", "tool_call_id": pending["tool_call_id"], "content": json.dumps(result)})
     events = []
     if approved:
