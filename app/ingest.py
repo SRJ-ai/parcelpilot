@@ -3,6 +3,7 @@
 Loading the whole pack at startup is fine: the data is static and tiny. SQLite is
 used so access scoping is a clean WHERE clause and calculations are auditable.
 """
+import os
 import re
 import sqlite3
 import threading
@@ -30,9 +31,15 @@ def _norm(v):
     return v
 
 
-def load_sqlite() -> sqlite3.Connection:
+def load_sqlite(path: str | None = None) -> sqlite3.Connection:
+    """Reference tables (accounts/orders/tickets) are always re-seeded fresh from the
+    workbook. The state tables (actions, audit_log) persist when STATE_DB points at a
+    file — so escalations and the audit trail survive restarts. Default `:memory:` keeps
+    tests and ephemeral runs clean. ponytail: disk SQLite is the right size here; Postgres
+    is the multi-worker scale path, not a day-one need."""
+    path = path or os.getenv("STATE_DB", ":memory:")
     wb = openpyxl.load_workbook(DATA_DIR / WORKBOOK, data_only=True)
-    con = sqlite3.connect(":memory:", check_same_thread=False)
+    con = sqlite3.connect(path, check_same_thread=False)
     con.row_factory = sqlite3.Row
     for name in SHEET_TABLES:
         ws = wb[name]
@@ -40,17 +47,18 @@ def load_sqlite() -> sqlite3.Connection:
         header = [str(h) for h in rows[0]]
         cols = ", ".join(f'"{h}"' for h in header)
         col_defs = ", ".join(f'"{h}" TEXT' for h in header)
+        con.execute(f"DROP TABLE IF EXISTS {name}")  # reference data is authoritative from the workbook
         con.execute(f"CREATE TABLE {name} ({col_defs})")
         ph = ", ".join("?" for _ in header)
         con.executemany(
             f"INSERT INTO {name} ({cols}) VALUES ({ph})",
             [[_norm(v) for v in r] for r in rows[1:]],
         )
-    # mock store for state-changing actions (reset on restart)
-    con.execute(
-        "CREATE TABLE actions (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, "
-        "payload TEXT, created_at TEXT)"
-    )
+    # persistent state: mock action store + append-only audit trail
+    con.execute("CREATE TABLE IF NOT EXISTS actions (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "kind TEXT, payload TEXT, created_at TEXT)")
+    con.execute("CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "ts TEXT, request_id TEXT, role TEXT, event TEXT, detail TEXT)")
     con.commit()
     return con
 

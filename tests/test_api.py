@@ -65,6 +65,12 @@ def test_rate_limit(client):
     assert 429 in codes
 
 
+def test_audit_endpoint_staff_only(client):
+    assert client.get(f"/audit?token={session(client, 'customer_beacon')}").status_code == 403
+    r = client.get(f"/audit?token={session(client, 'staff_agent')}")
+    assert r.status_code == 200 and "entries" in r.json()
+
+
 def test_security_headers_and_health(client):
     r = client.get("/health")
     assert r.status_code == 200 and r.json()["status"] == "ok"

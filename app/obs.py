@@ -26,6 +26,10 @@ def new_request_id() -> str:
     return rid
 
 
+def current_id() -> str:
+    return _request_id.get()
+
+
 def event(msg: str, level=logging.INFO, **fields):
     kv = " ".join(f"{k}={v}" for k, v in fields.items())
     _log.log(level, "rid=%s %s %s", _request_id.get(), msg, kv)

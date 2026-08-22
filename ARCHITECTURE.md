@@ -9,7 +9,7 @@ A single agent backend serving **two user contexts** over one shared data/tool l
 
 Both contexts share the same tools, retrieval index, and structured data. The **only** difference is the `AuthContext` passed into the tool layer, which decides what rows and documents are visible and which actions are allowed. Access control lives in code, never in the prompt.
 
-Stack: **Python 3.11 + FastAPI**, an **OpenAI-compatible LLM client** driving the native tool-calling loop (no agent framework) — **Groq** (hosted, `openai/gpt-oss-120b`) by default, with an **Ollama** backend (local or Ollama Cloud) as a drop-in offline fallback via the same wire format, **SQLite** (loaded from the workbook at startup) for structured data, **in-memory BM25** over section-chunked documents for retrieval, and a **vanilla HTML/JS** chat page with tool-activity badges and a confirmation modal.
+Stack: **Python 3.11 + FastAPI**, an **OpenAI-compatible LLM client** driving the native tool-calling loop (no agent framework) — **Groq** (hosted, `openai/gpt-oss-120b`) by default, with an **Ollama** backend (local or Ollama Cloud) as a drop‑in offline fallback via the same wire format, **SQLite** (loaded from the workbook at startup) for structured data, **in‑memory BM25** over section‑chunked documents for retrieval, and a **vanilla HTML/JS chat page with a tool‑activity trace and a confirmation card**.
 
 ## 2. Agent design
 

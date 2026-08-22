@@ -92,6 +92,7 @@ def run(history, toolbox: ToolBox):
                 except Exception:
                     pass
                 obs.event("abstained", grounded=round(trust["grounded"], 2), escalate=trust["escalate"], ref=ref)
+                toolbox.audit("abstained", grounded=round(trust["grounded"], 2), ref=ref)
                 msg = ("I'm not confident this answer is fully supported by our current sources, so I won't "
                        "risk a wrong response. I've flagged it for a human support agent to review"
                        + (f" (ref {ref})" if ref else "") + ", who will follow up.")

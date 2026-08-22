@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from app.ingest import load_sqlite, DocIndex
 from app.auth import MOCK_SESSIONS
 from app.tools import ToolBox
+from app.state import open_state
 from app import agent, proactive, obs
 
 load_dotenv()
@@ -29,6 +30,7 @@ load_dotenv()
 app = FastAPI(title="ParcelPilot AI Support")
 CON = load_sqlite()
 IDX = DocIndex()
+STATE = open_state(CON)  # Postgres/Supabase when DATABASE_URL is set, else SQLite
 STATIC = Path(__file__).resolve().parent / "static"
 
 SESSIONS: dict[str, dict] = {}      # token -> {auth, history, pending, created, last, hits[]}
@@ -148,7 +150,7 @@ def chat(inp: ChatIn):
         return JSONResponse({"error": "rate limit exceeded; slow down"}, status_code=429)
     s["history"].append({"role": "user", "content": inp.message})
     try:
-        events, pending = agent.run(s["history"], ToolBox(CON, IDX, s["auth"]))
+        events, pending = agent.run(s["history"], ToolBox(CON, IDX, s["auth"], STATE))
     except Exception as e:
         obs.error("llm_failure", err=f"{type(e).__name__}: {e}")
         return JSONResponse({"error": f"The assistant is temporarily unavailable ({type(e).__name__}). Please retry."},
@@ -167,7 +169,7 @@ def confirm(inp: ConfirmIn):
     pending = s["pending"]
     s["pending"] = None
     try:
-        events, new_pending = agent.confirm(s["history"], ToolBox(CON, IDX, s["auth"]), pending, inp.approved)
+        events, new_pending = agent.confirm(s["history"], ToolBox(CON, IDX, s["auth"], STATE), pending, inp.approved)
     except Exception as e:
         obs.error("llm_failure", err=f"{type(e).__name__}: {e}")
         return JSONResponse({"error": f"The assistant is temporarily unavailable ({type(e).__name__}). Please retry."},
@@ -184,6 +186,16 @@ def proactive_feed(token: str):
     if s["auth"].is_customer:
         return JSONResponse({"error": "staff only"}, status_code=403)
     return {"items": proactive.attention_feed(CON)}
+
+
+@app.get("/audit")
+def audit_trail(token: str, limit: int = 50):
+    s = _auth_session(token)
+    if s is None:
+        return JSONResponse({"error": "invalid or expired session"}, status_code=401)
+    if s["auth"].is_customer:
+        return JSONResponse({"error": "staff only"}, status_code=403)
+    return {"entries": STATE.recent_audit(max(1, min(limit, 200)))}
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
