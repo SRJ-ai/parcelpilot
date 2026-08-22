@@ -34,9 +34,10 @@ class ToolBox:
     def search_documents(self, query: str, include_deprecated: bool = False) -> dict:
         hits = self.idx.search(query, account_id=self.auth.scope_account(),
                                include_deprecated=include_deprecated, top_k=5)
+        from app.docs import doc_id
         return {"results": [
-            {"title": h["title"], "doc_type": h["doc_type"], "status": h["status"],
-             "authority_tier": h["authority_tier"], "effective": h["effective"],
+            {"doc_id": doc_id(h["doc_file"]), "title": h["title"], "doc_type": h["doc_type"],
+             "status": h["status"], "authority_tier": h["authority_tier"], "effective": h["effective"],
              "section_text": h["text"]} for h in hits]}
 
     def lookup_data(self, entity: str, filters: dict | None = None) -> dict:

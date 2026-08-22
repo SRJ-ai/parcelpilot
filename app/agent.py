@@ -64,6 +64,7 @@ def run(history, toolbox: ToolBox):
     Returns (events, pending). pending is None, or a dict to resume with confirm()."""
     events = []
     evidence = []  # tool results this turn, fed to the grounding verifier
+    sources = {}   # doc_id -> {id, title, sections[]} for clickable citations
     turn_tokens = 0
     _trim(history)
     for _ in range(MAX_STEPS):
@@ -106,6 +107,8 @@ def run(history, toolbox: ToolBox):
             ev = {"type": "final", "text": final_text, "tokens": turn_tokens}
             if trust is not None:
                 ev["trust"] = trust
+            if sources:
+                ev["sources"] = list(sources.values())
             events.append(ev)
             return events, None
 
@@ -123,6 +126,11 @@ def run(history, toolbox: ToolBox):
                 payload = json.dumps(result)
                 history.append({"role": "tool", "tool_call_id": tc.id, "content": payload})
                 evidence.append(payload)
+                if name == "search_documents":
+                    for r in result.get("results", []):
+                        s = sources.setdefault(r["doc_id"], {"id": r["doc_id"], "title": r["title"], "sections": []})
+                        if r.get("section_text") and r["section_text"] not in s["sections"]:
+                            s["sections"].append(r["section_text"])
                 events.append({"type": "tool_result", "name": name})
             elif name in WRITE_TOOLS:
                 preview = toolbox.preview_write(name, args)

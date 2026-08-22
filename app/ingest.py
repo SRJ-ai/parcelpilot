@@ -59,6 +59,12 @@ def load_sqlite(path: str | None = None) -> sqlite3.Connection:
                 "kind TEXT, payload TEXT, created_at TEXT)")
     con.execute("CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                 "ts TEXT, request_id TEXT, role TEXT, event TEXT, detail TEXT)")
+    con.execute("CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, user_email TEXT, "
+                "title TEXT, created_at TEXT, updated_at TEXT)")
+    con.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "conversation_id TEXT, role TEXT, content TEXT, meta TEXT, created_at TEXT)")
+    con.execute("CREATE TABLE IF NOT EXISTS raised_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "account_id TEXT, email TEXT, subject TEXT, description TEXT, status TEXT, created_at TEXT)")
     con.commit()
     return con
 

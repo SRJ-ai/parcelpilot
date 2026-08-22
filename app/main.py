@@ -7,6 +7,7 @@ conversation state is keyed by the token's jti.
 """
 import os
 import time
+import secrets
 from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -18,7 +19,7 @@ from app.ingest import load_sqlite, DocIndex
 from app import auth as authmod
 from app.tools import ToolBox
 from app.state import open_state
-from app import agent, proactive, obs
+from app import agent, proactive, obs, docs as docmod
 
 load_dotenv()
 
@@ -86,12 +87,36 @@ class LoginIn(BaseModel):
 
 class ChatIn(BaseModel):
     token: str = Field(min_length=8, max_length=4000)
+    conversation_id: str = Field(min_length=8, max_length=64)
     message: str = Field(min_length=1, max_length=4000)
 
 
 class ConfirmIn(BaseModel):
     token: str = Field(min_length=8, max_length=4000)
+    conversation_id: str = Field(min_length=8, max_length=64)
     approved: bool
+
+
+class TicketIn(BaseModel):
+    token: str = Field(min_length=8, max_length=4000)
+    subject: str = Field(min_length=1, max_length=160)
+    description: str = Field(min_length=1, max_length=4000)
+
+
+# per-conversation working state (history + pending confirmation), rebuilt from the DB
+CONV: dict[str, dict] = {}
+
+
+def _conv_state(conv_id: str) -> dict:
+    c = CONV.get(conv_id)
+    if c is None:
+        history = agent.new_history()
+        for m in STATE.get_messages(conv_id):
+            if m["role"] in ("user", "assistant") and m.get("content"):
+                history.append({"role": m["role"], "content": m["content"]})
+        c = {"history": history, "pending": None}
+        CONV[conv_id] = c
+    return c
 
 
 @app.middleware("http")
@@ -153,25 +178,78 @@ def login(inp: LoginIn):
             "is_admin": ctx.is_admin}
 
 
+def _final_meta(events):
+    """Extract the assistant's final text + metadata for persistence."""
+    for e in events:
+        if e["type"] == "final":
+            return e["text"], {k: e[k] for k in ("trust", "sources", "tokens", "abstained", "escalation_ref") if k in e}
+    return "", {}
+
+
+def _own_conversation(ctx, conv_id: str) -> bool:
+    owner = STATE.conversation_owner(conv_id)
+    return owner is not None and owner == ctx.email
+
+
+@app.post("/conversations")
+def new_conversation(token: str):
+    a = _auth(token)
+    if a is None:
+        return JSONResponse({"error": "invalid or expired session"}, status_code=401)
+    cid = secrets.token_urlsafe(12)
+    STATE.create_conversation(cid, a[0].email, "New chat")
+    return {"id": cid, "title": "New chat"}
+
+
+@app.get("/conversations")
+def list_conversations(token: str):
+    a = _auth(token)
+    if a is None:
+        return JSONResponse({"error": "invalid or expired session"}, status_code=401)
+    return {"conversations": STATE.list_conversations(a[0].email)}
+
+
+@app.get("/conversations/{conv_id}")
+def get_conversation(conv_id: str, token: str):
+    a = _auth(token)
+    if a is None:
+        return JSONResponse({"error": "invalid or expired session"}, status_code=401)
+    if not _own_conversation(a[0], conv_id):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return {"messages": STATE.get_messages(conv_id)}
+
+
 @app.post("/chat")
 def chat(inp: ChatIn):
     a = _auth(inp.token)
     if a is None:
         return JSONResponse({"error": "invalid or expired session"}, status_code=401)
     ctx, s = a
-    if s["pending"]:
+    if not _own_conversation(ctx, inp.conversation_id):
+        return JSONResponse({"error": "conversation not found"}, status_code=404)
+    c = _conv_state(inp.conversation_id)
+    if c["pending"]:
         return JSONResponse({"error": "confirm or cancel the pending action first"}, status_code=409)
     if not _rate_ok(s):
         return JSONResponse({"error": "rate limit exceeded; slow down"}, status_code=429)
-    s["history"].append({"role": "user", "content": inp.message})
+    first = not any(m["role"] == "user" for m in c["history"])
+    c["history"].append({"role": "user", "content": inp.message})
+    STATE.add_message(inp.conversation_id, "user", inp.message)
+    if first:
+        STATE.set_title(inp.conversation_id, inp.message[:60])
     try:
-        events, pending = agent.run(s["history"], ToolBox(CON, IDX, ctx, STATE))
+        events, pending = agent.run(c["history"], ToolBox(CON, IDX, ctx, STATE))
     except Exception as e:
         obs.error("llm_failure", err=f"{type(e).__name__}: {e}")
         return JSONResponse({"error": f"The assistant is temporarily unavailable ({type(e).__name__}). Please retry."},
                             status_code=502)
-    s["pending"] = pending
-    return {"events": events, "awaiting_confirmation": pending is not None}
+    c["pending"] = pending
+    if pending is None:
+        text, meta = _final_meta(events)
+        if text:
+            STATE.add_message(inp.conversation_id, "assistant", text, meta)
+    return {"events": events, "awaiting_confirmation": pending is not None,
+            "title_updated": first}
 
 
 @app.post("/confirm")
@@ -179,18 +257,25 @@ def confirm(inp: ConfirmIn):
     a = _auth(inp.token)
     if a is None:
         return JSONResponse({"error": "invalid or expired session"}, status_code=401)
-    ctx, s = a
-    if not s["pending"]:
+    ctx, _ = a
+    if not _own_conversation(ctx, inp.conversation_id):
+        return JSONResponse({"error": "conversation not found"}, status_code=404)
+    c = _conv_state(inp.conversation_id)
+    if not c["pending"]:
         return JSONResponse({"error": "no pending action"}, status_code=400)
-    pending = s["pending"]
-    s["pending"] = None
+    pending = c["pending"]
+    c["pending"] = None
     try:
-        events, new_pending = agent.confirm(s["history"], ToolBox(CON, IDX, ctx, STATE), pending, inp.approved)
+        events, new_pending = agent.confirm(c["history"], ToolBox(CON, IDX, ctx, STATE), pending, inp.approved)
     except Exception as e:
         obs.error("llm_failure", err=f"{type(e).__name__}: {e}")
         return JSONResponse({"error": f"The assistant is temporarily unavailable ({type(e).__name__}). Please retry."},
                             status_code=502)
-    s["pending"] = new_pending
+    c["pending"] = new_pending
+    if new_pending is None:
+        text, meta = _final_meta(events)
+        if text:
+            STATE.add_message(inp.conversation_id, "assistant", text, meta)
     return {"events": events, "awaiting_confirmation": new_pending is not None}
 
 
@@ -224,6 +309,49 @@ def metrics(token: str):
     snap = obs.metrics_snapshot()
     snap["active_sessions"] = len(SESSIONS)
     return snap
+
+
+@app.post("/ticket")
+def raise_ticket(inp: TicketIn):
+    a = _auth(inp.token)
+    if a is None:
+        return JSONResponse({"error": "invalid or expired session"}, status_code=401)
+    ctx = a[0]
+    ref = STATE.raise_ticket(ctx.account_id or "-", ctx.email, inp.subject, inp.description)
+    obs.event("ticket_raised", ref=ref, account=ctx.account_id)
+    ToolBox(CON, IDX, ctx, STATE).audit("ticket_raised", ref=ref, subject=inp.subject[:60])
+    return {"ref": ref}
+
+
+@app.get("/tickets")
+def tickets(token: str):
+    a = _auth(token)
+    if a is None:
+        return JSONResponse({"error": "invalid or expired session"}, status_code=401)
+    ctx = a[0]
+    # staff see every raised ticket; a customer sees only their own
+    return {"tickets": STATE.list_tickets(None if not ctx.is_customer else ctx.account_id)}
+
+
+@app.get("/documents")
+def list_docs(token: str):
+    a = _auth(token)
+    if a is None:
+        return JSONResponse({"error": "invalid or expired session"}, status_code=401)
+    return {"docs": [{"id": d["id"], "title": d["title"], "type": d["doc_type"], "status": d["status"]}
+                     for d in docmod.visible_docs(a[0])]}
+
+
+@app.get("/document/{doc_id}")
+def get_doc(doc_id: str, token: str):
+    a = _auth(token)
+    if a is None:
+        return JSONResponse({"error": "invalid or expired session"}, status_code=401)
+    d = docmod.resolve(a[0], doc_id)
+    if d is None:
+        return JSONResponse({"error": "not found or not permitted for your account"}, status_code=404)
+    return FileResponse(docmod.path_for(d), media_type=docmod.media_type(d["file"]),
+                        headers={"Content-Disposition": f'inline; filename="{d["file"]}"'})
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
