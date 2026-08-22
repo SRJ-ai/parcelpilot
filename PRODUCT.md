@@ -40,9 +40,13 @@ so reliability is verified, not asserted.
 
 **Bonus: Problem 1 — Proactive Issue Detection.** Internal staff get a "needs attention" feed:
 deterministic rules over live data surface suspected security incidents, likely P1 outages, breached
-SLAs, recurring known-issue clusters (e.g. repeated bulk-upload tickets → KI-208), and outstanding
-carrier-fault pickups that likely owe a credit — ranked by urgency, with heuristic severity clearly
-flagged for human confirmation.
+SLAs, and outstanding carrier-fault pickups that likely owe a credit — ranked by urgency, with
+heuristic severity clearly flagged for human confirmation. Recurring problems are found by
+**clustering the ticket text itself** (not a hardcoded issue list), so a brand-new pattern surfaces
+the same way a known one does; a theme spanning multiple accounts is promoted to a **cross-customer**
+alert ("issues affecting multiple customers at the same time"), and known issues (KI-208 bulk upload,
+KI-211 stale-BOOKED webhook) are attached as enrichment with their workaround. Staff also get a
+read-only **audit trail** of every action, injection-flag, and grounding abstention.
 
 ## What I would build next (prioritised)
 

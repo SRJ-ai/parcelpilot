@@ -92,7 +92,13 @@ Because scoping happens in the tool layer, a prompt-injection or a customer aski
 
 ## 8. Interface
 
-A single-page chat UI served by FastAPI: an animated **tool-activity trace** showing each tool as it runs (`search_documents("...")`, `lookup_data(orders, ...)`, `compute_policy_outcome(...)`) with a live/done state per step, a **confirmation card** for state-changing actions, and a **role switcher** to mock the two contexts. The client renders the model's markdown (tables, citations, lists) with a small self-contained parser. Internal (staff) sessions additionally get a **Proactive Attention panel** (Problem 1): deterministic rules over the live data surface open P1s, SLA breaches, security tickets, and clusters of the same known issue (e.g. repeated bulk-upload tickets → KI-208), ranked by urgency. (Responses render the full tool trace then the final answer; token streaming is a listed next step, not yet implemented.)
+A single-page chat UI served by FastAPI: an animated **tool-activity trace** showing each tool as it runs (`search_documents("...")`, `lookup_data(orders, ...)`, `compute_policy_outcome(...)`) with a live/done state per step, a **confirmation card** for state-changing actions, and a **role switcher** to mock the two contexts. The client renders the model's markdown (tables, citations, lists) with a small self-contained parser. Internal (staff) sessions additionally get two panels: a **Proactive Attention feed** (Problem 1) and a collapsible **Audit trail**. (Responses render the full tool trace then the final answer; token streaming is a listed next step, not yet implemented.)
+
+**Proactive Attention feed (Problem 1)** — deterministic rules over the live data, no LLM, ranked by urgency:
+- *Single-ticket signals* on open tickets: suspected security incidents, possible P1 outages, and first-response SLA breaches (24×7 targets asserted exactly; business-hours targets flagged for calendar verification, never asserted).
+- *Emergent clustering* discovers recurring themes **from the ticket text itself** — significant-token bigrams shared by ≥2 tickets — rather than matching a fixed list, so a brand-new recurring problem surfaces the same way a known one does. It runs over open **and** closed tickets, so a recurrence that began in a resolved ticket is still caught (the earlier open-only rule missed exactly this). A cluster spanning ≥2 accounts is promoted to a **cross-customer** item and outranks a single-account recurrence. Discovered clusters are *enriched* (not gated) with a known-issue reference + workaround when the text matches a signature (e.g. bulk-upload → KI-208, stale-BOOKED → KI-211), and account names are excluded from theme discovery so a customer's name can't masquerade as an issue.
+
+**Audit trail** — the append-only `audit_log` (see §10) surfaced read-only to staff: every committed action, injection-flag, and grounding abstention with actor role and timestamp. It refreshes after each chat turn and confirmed action, giving staff an inline "who did what, when" record.
 
 ## 9. Major technical trade-offs
 
@@ -112,6 +118,7 @@ Beyond the assessment core, the app carries the controls a real deployment needs
 - **Resilience** — LLM request timeout with no double-retry (key fail-over is ours), and a graceful, user-facing message on provider failure.
 - **Abuse controls** — request-body validation (message length), per-token rate limiting, session TTL and eviction.
 - **Observability** — structured logs with a per-request id (`X-Request-ID`), an HTTP access line with latency, and tool-call / action / grounding traces.
+- **Append-only audit trail** — every committed action, prompt-injection flag, and grounding abstention is written to an `audit_log` (actor role, event, detail, timestamp) via a pluggable state store (in-memory SQLite by default; Postgres/Supabase when `DATABASE_URL` is set, so the record survives restarts). Exposed read-only to staff at `GET /audit` and surfaced in the UI's Audit-trail panel — the "why did it say/do that" record a regulated deployment needs.
 - **Operational** — `/health` endpoint, security headers + CSP, a non-root container with a healthcheck, and CI running the offline test suite on every push.
 
 The trust boundary and limits are covered by HTTP/auth integration tests (with the LLM mocked), so the impersonation defence and rate limits are verified, not assumed.
