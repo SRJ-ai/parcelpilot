@@ -59,6 +59,22 @@ select {
   background-repeat: no-repeat; background-position: right 10px center; padding-right: 32px;
 }
 select:hover { border-color: var(--ink-3); }
+.signout { margin-top: 9px; font: inherit; font-size: 12px; color: var(--ink-2); background: transparent; border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px; cursor: pointer; width: 100%; transition: border-color .15s, color .15s; }
+.signout:hover { border-color: var(--danger); color: var(--danger); }
+.loginwrap { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: var(--bg); padding: 24px; }
+.logincard { width: 100%; max-width: 360px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 26px 24px; display: flex; flex-direction: column; }
+.lg-brand { display: flex; align-items: center; gap: 9px; font-size: 18px; font-weight: 650; letter-spacing: -0.02em; }
+.lg-brand svg { width: 24px; height: 24px; color: var(--accent); }
+.lg-sub { font-size: 13px; color: var(--ink-3); margin: 4px 0 18px; }
+.logincard label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-3); margin: 10px 0 6px; }
+.logincard input { font: inherit; font-size: 15px; color: var(--ink); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.logincard input:focus { border-color: var(--accent); background: var(--panel); }
+.logincard .btn { margin-top: 18px; width: 100%; padding: 11px; font-size: 14px; }
+.lg-err { font-size: 12px; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger); border-radius: 8px; padding: 8px 11px; margin-top: 12px; }
+.lg-hint { font-size: 11px; color: var(--ink-3); margin-top: 12px; text-align: center; }
+.lg-hint code { font-family: var(--mono); background: var(--panel-2); border: 1px solid var(--line); padding: 1px 5px; border-radius: 4px; }
+.mrow { font-size: 12px; display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--line); }
+.mrow .k { color: var(--ink-3); font-family: var(--mono); } .mrow .v { color: var(--ink); font-variant-numeric: tabular-nums; font-family: var(--mono); }
 .ctx { margin-top: 9px; font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 7px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; box-shadow: 0 0 0 3px var(--ok-soft); }
 .dot.staff { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
@@ -188,6 +204,25 @@ textarea::placeholder { color: var(--ink-3); }
 </head>
 <body>
 <div class="app">
+  <div class="loginwrap" id="loginwrap" hidden>
+    <form class="logincard" id="loginform">
+      <div class="lg-brand">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5 12 3l9 5.5v7L12 21l-9-5.5z"/><path d="M3 8.5 12 14l9-5.5M12 14v7"/></svg>
+        ParcelPilot
+      </div>
+      <div class="lg-sub">Sign in to the support console</div>
+      <label for="acctpick">Demo account</label>
+      <select id="acctpick"></select>
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" placeholder="you@parcelpilot.duckdns.org" />
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" placeholder="••••••••" />
+      <div class="lg-err" id="lgerr" hidden></div>
+      <button class="btn primary" id="loginbtn" type="submit">Sign in</button>
+      <div class="lg-hint">Demo password for every account: <code>Password123</code></div>
+    </form>
+  </div>
+
   <aside class="side">
     <div class="brand">
       <h1>
@@ -197,10 +232,10 @@ textarea::placeholder { color: var(--ink-3); }
       </h1>
       <div class="sub">AI Support Console</div>
     </div>
-    <div class="block">
-      <label for="login">Signed in as</label>
-      <select id="login"></select>
+    <div class="block" id="identity">
+      <label>Signed in</label>
       <div class="ctx" id="ctx"><span class="dot"></span><span id="ctxtext">—</span></div>
+      <button class="signout" id="signout" type="button">Sign out</button>
     </div>
     <div class="block">
       <label>Try asking</label>
@@ -223,6 +258,16 @@ textarea::placeholder { color: var(--ink-3); }
         </button>
       </h2>
       <div id="auditlog"></div>
+    </div>
+    <div class="audit collapsed" id="metricsbox" hidden>
+      <h2 id="metricstoggle">
+        <svg class="chev" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        System metrics
+        <button class="refresh" id="metricsrefresh" title="Refresh metrics" aria-label="Refresh metrics">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v5h-5"/></svg>
+        </button>
+      </h2>
+      <div id="metricslog"></div>
     </div>
   </aside>
 
@@ -247,7 +292,7 @@ textarea::placeholder { color: var(--ink-3); }
 </div>
 
 <script>
-let TOKEN = null, IS_STAFF = false;
+let TOKEN = null, IS_STAFF = false, IS_ADMIN = false;
 const $ = s => document.querySelector(s);
 const thread = $("#thread");
 let busy = false;
@@ -425,21 +470,58 @@ function refreshExamples(contextLabel) {
     b.onclick = () => { $("#input").value = t; $("#input").focus(); autosize(); };
     box.appendChild(b);
   });
-  $("#ctxtext").textContent = contextLabel || $("#login").value;
+  $("#ctxtext").textContent = contextLabel || "—";
   $("#ctx").querySelector(".dot").className = "dot" + (IS_STAFF ? " staff" : "");
   $("#feedbox").hidden = !IS_STAFF;
   $("#auditbox").hidden = !IS_STAFF;
+  $("#metricsbox").hidden = !IS_ADMIN;
 }
 
 // Establish a server-side session for the chosen mock login; the returned token
 // (not the login string) authorizes every later request.
-async function selectRole() {
-  const r = await post("/session", { login: $("#login").value });
-  if (r.error) { TOKEN = null; return; }
-  TOKEN = r.token; IS_STAFF = r.is_staff;
+function showLogin(show) { $("#loginwrap").hidden = !show; }
+
+async function populateAccounts() {
+  try {
+    const data = await (await fetch("/accounts")).json();
+    const sel = $("#acctpick"); sel.innerHTML = "";
+    (data.accounts || []).forEach(a => {
+      const o = document.createElement("option"); o.value = a.email; o.textContent = a.label; sel.appendChild(o);
+    });
+    const apply = () => { $("#email").value = sel.value; $("#password").value = "Password123"; };
+    sel.onchange = apply; apply();
+  } catch (_) {}
+}
+
+async function doLogin(email, password) {
+  const err = $("#lgerr"); err.hidden = true;
+  const r = await post("/login", { email, password });
+  if (r.error || !r.token) { err.textContent = r.error || "Sign in failed"; err.hidden = false; return; }
+  TOKEN = r.token; IS_STAFF = r.is_staff; IS_ADMIN = r.is_admin;
+  showLogin(false);
   resetThread();
-  refreshExamples(r.context);
+  refreshExamples(r.label);
   if (IS_STAFF) { loadFeed(); loadAudit(); }
+  if (IS_ADMIN) loadMetrics();
+  $("#input").focus();
+}
+
+function logout() {
+  TOKEN = null; IS_STAFF = false; IS_ADMIN = false;
+  resetThread(); populateAccounts(); showLogin(true);
+}
+
+async function loadMetrics() {
+  if (!TOKEN || !IS_ADMIN) return;
+  const box = $("#metricslog"); box.innerHTML = `<div class="empty-feed">Loading…</div>`;
+  try {
+    const m = await (await fetch("/metrics?token=" + encodeURIComponent(TOKEN))).json();
+    if (m.error) { box.innerHTML = `<div class="empty-feed">${esc(m.error)}</div>`; return; }
+    const rows = [["uptime (s)", m.uptime_seconds], ["active sessions", m.active_sessions],
+                 ["latency p50/p95 ms", m.latency_ms.p50 + " / " + m.latency_ms.p95]];
+    Object.entries(m.counters || {}).sort().forEach(([k, v]) => rows.push([k, v]));
+    box.innerHTML = rows.map(([k, v]) => `<div class="mrow"><span class="k">${esc(k)}</span><span class="v">${esc(String(v))}</span></div>`).join("");
+  } catch (e) { box.innerHTML = `<div class="empty-feed">Metrics unavailable.</div>`; }
 }
 
 async function loadFeed() {
@@ -496,18 +578,18 @@ function resetThread() {
 }
 
 async function boot() {
-  const res = await fetch("/logins"); const data = await res.json();
-  $("#provider").textContent = data.provider || "llm";
-  const sel = $("#login");
-  data.logins.forEach(l => { const o = document.createElement("option"); o.value = l; o.textContent = l.replace(/_/g, " "); sel.appendChild(o); });
-  sel.value = data.logins.find(l => l.startsWith("customer")) || data.logins[0];
-  sel.onchange = selectRole;
-  await selectRole();
+  try { const h = await (await fetch("/health")).json(); $("#provider").textContent = h.provider || "llm"; } catch (_) {}
+  await populateAccounts();
+  showLogin(true);
 }
 $("#send").onclick = send;
 $("#refresh").onclick = loadFeed;
 $("#auditrefresh").onclick = (e) => { e.stopPropagation(); loadAudit(); };
 $("#audittoggle").onclick = () => $("#auditbox").classList.toggle("collapsed");
+$("#metricsrefresh").onclick = (e) => { e.stopPropagation(); loadMetrics(); };
+$("#metricstoggle").onclick = () => $("#metricsbox").classList.toggle("collapsed");
+$("#signout").onclick = logout;
+$("#loginform").onsubmit = (e) => { e.preventDefault(); doLogin($("#email").value.trim(), $("#password").value); };
 $("#input").addEventListener("input", autosize);
 $("#input").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
 boot();

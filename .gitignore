@@ -12,3 +12,7 @@ s1*.json
 # Supabase CLI local artifacts (project ref / branch state — not for VCS)
 supabase/.temp/
 supabase/.branches/
+
+# tooling artifacts
+.agents/
+skills-lock.json

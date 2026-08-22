@@ -12,6 +12,8 @@ dependencies = [
     "rank-bm25>=0.2.2",
     "python-dotenv>=1.0",
     "psycopg[binary]>=3.2",
+    "pyjwt>=2.9",
+    "bcrypt>=4.2",
 ]
 
 [dependency-groups]
