@@ -2,6 +2,7 @@
 live data — no LLM needed. Heuristic severity is flagged as heuristic; staff confirm.
 """
 import re
+from app.ingest import DB_LOCK
 from app.reliability import sla_breach
 
 SECURITY_RE = re.compile(r"api key|credential|exposure|password|secret|leak", re.I)
@@ -18,8 +19,9 @@ def _guess_severity(text: str) -> str:
 
 
 def attention_feed(con) -> list[dict]:
-    tickets = [dict(r) for r in con.execute("SELECT * FROM tickets WHERE status='open'").fetchall()]
-    plans = {r["account_id"]: r["plan"] for r in con.execute("SELECT account_id, plan FROM accounts").fetchall()}
+    with DB_LOCK:
+        tickets = [dict(r) for r in con.execute("SELECT * FROM tickets WHERE status='open'").fetchall()]
+        plans = {r["account_id"]: r["plan"] for r in con.execute("SELECT account_id, plan FROM accounts").fetchall()}
     items = []
 
     bulk_hits = []
@@ -55,8 +57,9 @@ def attention_feed(con) -> list[dict]:
                       "tickets": bulk_hits})
 
     # operational: outstanding carrier-fault pickups (service credit likely owed)
-    orders = [dict(r) for r in con.execute(
-        "SELECT * FROM orders WHERE carrier_fault IN ('True','1') AND pickup_actual_at IS NULL").fetchall()]
+    with DB_LOCK:
+        orders = [dict(r) for r in con.execute(
+            "SELECT * FROM orders WHERE carrier_fault IN ('True','1') AND pickup_actual_at IS NULL").fetchall()]
     for o in orders:
         items.append({"urgency": 60, "kind": "ops",
                       "title": f"Outstanding carrier-fault pickup — {o['order_id']}",

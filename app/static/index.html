@@ -212,7 +212,7 @@ textarea::placeholder { color: var(--ink-3); }
 </div>
 
 <script>
-let SID = "s-" + Math.random().toString(36).slice(2);
+let TOKEN = null, IS_STAFF = false;
 const $ = s => document.querySelector(s);
 const thread = $("#thread");
 let busy = false;
@@ -318,11 +318,11 @@ async function decide(approved, card) {
   const wrap = stepHolder();
   const typing = document.createElement("div"); typing.className = "typing"; typing.innerHTML = "<i></i><i></i><i></i>";
   wrap.appendChild(typing);
-  const r = await post("/confirm", { session_id: SID, login: $("#login").value, approved });
+  const r = await post("/confirm", { token: TOKEN, approved });
   typing.remove();
   if (r.error) { wrap.innerHTML = `<div class="errline">${esc(r.error)}</div>`; return; }
   await render(r.events, wrap);
-  if ($("#login").value.startsWith("staff")) loadFeed();
+  if (IS_STAFF) loadFeed();
 }
 
 async function post(url, body) {
@@ -340,7 +340,7 @@ async function send() {
   const wrap = stepHolder();
   const typing = document.createElement("div"); typing.className = "typing"; typing.innerHTML = "<i></i><i></i><i></i>";
   wrap.appendChild(typing); toBottom();
-  const r = await post("/chat", { session_id: SID, login: $("#login").value, message: text });
+  const r = await post("/chat", { token: TOKEN, message: text });
   typing.remove();
   if (r.error) { wrap.innerHTML = `<div class="errline">${esc(r.error)}</div>`; }
   else await render(r.events, wrap);
@@ -360,26 +360,34 @@ const EXAMPLES = {
     "Review ticket TKT-505 and escalate it if appropriate.",
   ],
 };
-function refreshExamples() {
-  const staff = $("#login").value.startsWith("staff");
+function refreshExamples(contextLabel) {
   const box = $("#examples"); box.innerHTML = "";
-  (staff ? EXAMPLES.staff : EXAMPLES.customer).forEach(t => {
+  (IS_STAFF ? EXAMPLES.staff : EXAMPLES.customer).forEach(t => {
     const b = document.createElement("button"); b.textContent = t;
     b.onclick = () => { $("#input").value = t; $("#input").focus(); autosize(); };
     box.appendChild(b);
   });
-  const map = { customer_northstar: "Northstar Logistics · customer", customer_lumenworks: "LumenWorks · customer",
-    customer_beacon: "Beacon Retail · customer", staff_agent: "Support agent · internal", staff_manager: "Support manager · internal" };
-  $("#ctxtext").textContent = map[$("#login").value] || $("#login").value;
-  $("#ctx").querySelector(".dot").className = "dot" + (staff ? " staff" : "");
-  $("#feedbox").hidden = !staff;
-  if (staff) loadFeed();
+  $("#ctxtext").textContent = contextLabel || $("#login").value;
+  $("#ctx").querySelector(".dot").className = "dot" + (IS_STAFF ? " staff" : "");
+  $("#feedbox").hidden = !IS_STAFF;
+}
+
+// Establish a server-side session for the chosen mock login; the returned token
+// (not the login string) authorizes every later request.
+async function selectRole() {
+  const r = await post("/session", { login: $("#login").value });
+  if (r.error) { TOKEN = null; return; }
+  TOKEN = r.token; IS_STAFF = r.is_staff;
+  resetThread();
+  refreshExamples(r.context);
+  if (IS_STAFF) loadFeed();
 }
 
 async function loadFeed() {
+  if (!TOKEN) return;
   const feed = $("#feed"); feed.innerHTML = `<div class="empty-feed">Loading…</div>`;
   try {
-    const res = await fetch("/proactive?login=" + encodeURIComponent($("#login").value));
+    const res = await fetch("/proactive?token=" + encodeURIComponent(TOKEN));
     const data = await res.json();
     if (!data.items || !data.items.length) { feed.innerHTML = `<div class="empty-feed">Nothing needs attention.</div>`; return; }
     feed.innerHTML = "";
@@ -395,7 +403,6 @@ async function loadFeed() {
 function autosize() { const i = $("#input"); i.style.height = "auto"; i.style.height = Math.min(i.scrollHeight, 160) + "px"; }
 
 function resetThread() {
-  SID = "s-" + Math.random().toString(36).slice(2);
   thread.innerHTML = `<div class="hello" id="hello">
     <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5 12 3l9 5.5v7L12 21l-9-5.5z"/><path d="M3 8.5 12 14l9-5.5M12 14v7"/></svg>
     <h3>How can I help?</h3>
@@ -408,8 +415,8 @@ async function boot() {
   const sel = $("#login");
   data.logins.forEach(l => { const o = document.createElement("option"); o.value = l; o.textContent = l.replace(/_/g, " "); sel.appendChild(o); });
   sel.value = data.logins.find(l => l.startsWith("customer")) || data.logins[0];
-  sel.onchange = () => { resetThread(); refreshExamples(); };
-  refreshExamples();
+  sel.onchange = selectRole;
+  await selectRole();
 }
 $("#send").onclick = send;
 $("#refresh").onclick = loadFeed;

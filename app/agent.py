@@ -12,6 +12,19 @@ from app import llm
 
 READ_TOOLS = {"search_documents", "lookup_data", "compute_policy_outcome"}
 MAX_STEPS = 8
+MAX_HISTORY = 40  # non-system messages kept; older turns are dropped to bound cost/context
+
+
+def _trim(history):
+    """Drop oldest turns when history grows past MAX_HISTORY, cutting only at a `user`
+    boundary so a tool response is never orphaned from its tool_call."""
+    if len(history) <= MAX_HISTORY + 1:
+        return
+    cut = len(history) - MAX_HISTORY
+    while cut < len(history) and history[cut].get("role") != "user":
+        cut += 1
+    if 1 < cut < len(history):
+        del history[1:cut]
 
 SYSTEM_PROMPT = f"""You are ParcelPilot's AI support agent. The dataset snapshot (your "now") is {SNAPSHOT_NOW.isoformat()}. Use it for every time-based judgement.
 
@@ -48,6 +61,7 @@ def run(history, toolbox: ToolBox):
     """Drive the loop until a final answer or a confirmation pause.
     Returns (events, pending). pending is None, or a dict to resume with confirm()."""
     events = []
+    _trim(history)
     for _ in range(MAX_STEPS):
         resp = llm.chat(history, TOOL_SPECS).choices[0].message
         msg = {"role": "assistant", "content": resp.content or ""}

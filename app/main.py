@@ -1,16 +1,23 @@
-"""FastAPI app: chat + confirmation + proactive feed, single-page UI.
+"""FastAPI app: session auth, chat, confirmation, proactive feed, single-page UI.
 
-Conversation state (history + any pending confirmation) is kept per session in memory.
-The AuthContext is derived server-side from the chosen mock login and is never taken
-from the client message body, so it cannot be widened by the model or the user text.
+Identity is established once at POST /session (the mock authentication boundary) and
+returned as an opaque bearer token. Every later request carries only that token; the
+AuthContext is looked up server-side and is never taken from the request body. A client
+therefore cannot pick its own role or account — closing the impersonation hole where a
+customer could simply send {"login": "staff_agent"}.
+
+State (sessions, history, mock action store) is in-process. ponytail: fine for a single
+worker; a shared store (Redis) is the scale-out path for multiple workers.
 """
 import os
+import time
+import secrets
 from pathlib import Path
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.ingest import load_sqlite, DocIndex
 from app.auth import MOCK_SESSIONS
@@ -22,32 +29,77 @@ load_dotenv()
 app = FastAPI(title="ParcelPilot AI Support")
 CON = load_sqlite()
 IDX = DocIndex()
-SESSIONS: dict[str, dict] = {}   # session_id -> {"history", "pending", "login"}
 STATIC = Path(__file__).resolve().parent / "static"
 
+SESSIONS: dict[str, dict] = {}      # token -> {auth, history, pending, created, last, hits[]}
+SESSION_TTL = 60 * 60               # 1h idle expiry
+MAX_SESSIONS = 500
+RATE_MAX = 30                       # messages per RATE_WINDOW per token
+RATE_WINDOW = 60
 
-def _session(session_id: str, login: str) -> dict:
-    s = SESSIONS.get(session_id)
-    if s is None or s["login"] != login:
-        s = {"history": agent.new_history(), "pending": None, "login": login}
-        SESSIONS[session_id] = s
+CONTEXT_LABELS = {
+    "customer_northstar": "Northstar Logistics · customer",
+    "customer_lumenworks": "LumenWorks · customer",
+    "customer_beacon": "Beacon Retail · customer",
+    "staff_agent": "Support agent · internal",
+    "staff_manager": "Support manager · internal",
+}
+
+
+def _prune():
+    now = time.time()
+    for tok in [t for t, s in SESSIONS.items() if now - s["last"] > SESSION_TTL]:
+        SESSIONS.pop(tok, None)
+    if len(SESSIONS) > MAX_SESSIONS:  # evict oldest
+        for tok in sorted(SESSIONS, key=lambda t: SESSIONS[t]["last"])[: len(SESSIONS) - MAX_SESSIONS]:
+            SESSIONS.pop(tok, None)
+
+
+def _auth_session(token: str):
+    s = SESSIONS.get(token or "")
+    if s is None:
+        return None
+    if time.time() - s["last"] > SESSION_TTL:
+        SESSIONS.pop(token, None)
+        return None
+    s["last"] = time.time()
     return s
 
 
-def _toolbox(login: str) -> ToolBox:
-    return ToolBox(CON, IDX, MOCK_SESSIONS[login])
+def _rate_ok(s) -> bool:
+    now = time.time()
+    s["hits"] = [t for t in s["hits"] if now - t < RATE_WINDOW]
+    if len(s["hits"]) >= RATE_MAX:
+        return False
+    s["hits"].append(now)
+    return True
+
+
+class SessionIn(BaseModel):
+    login: str = Field(min_length=1, max_length=64)
 
 
 class ChatIn(BaseModel):
-    session_id: str
-    login: str
-    message: str
+    token: str = Field(min_length=8, max_length=128)
+    message: str = Field(min_length=1, max_length=4000)
 
 
 class ConfirmIn(BaseModel):
-    session_id: str
-    login: str
+    token: str = Field(min_length=8, max_length=128)
     approved: bool
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["Content-Security-Policy"] = (
+        "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
+    )
+    return resp
 
 
 @app.get("/")
@@ -55,46 +107,73 @@ def index():
     return FileResponse(STATIC / "index.html")
 
 
+@app.get("/health")
+def health():
+    return {"status": "ok", "provider": os.getenv("LLM_PROVIDER", "groq"), "sessions": len(SESSIONS)}
+
+
 @app.get("/logins")
 def logins():
-    return {"logins": list(MOCK_SESSIONS.keys()),
-            "provider": os.getenv("LLM_PROVIDER", "groq")}
+    return {"logins": list(MOCK_SESSIONS.keys()), "provider": os.getenv("LLM_PROVIDER", "groq")}
+
+
+@app.post("/session")
+def create_session(inp: SessionIn):
+    if inp.login not in MOCK_SESSIONS:
+        return JSONResponse({"error": "unknown login"}, status_code=400)
+    _prune()
+    token = secrets.token_urlsafe(24)
+    now = time.time()
+    SESSIONS[token] = {"auth": MOCK_SESSIONS[inp.login], "history": agent.new_history(),
+                       "pending": None, "created": now, "last": now, "hits": [],
+                       "context": CONTEXT_LABELS.get(inp.login, inp.login),
+                       "is_staff": not MOCK_SESSIONS[inp.login].is_customer}
+    return {"token": token, "context": SESSIONS[token]["context"], "is_staff": SESSIONS[token]["is_staff"]}
 
 
 @app.post("/chat")
 def chat(inp: ChatIn):
-    if inp.login not in MOCK_SESSIONS:
-        return JSONResponse({"error": "unknown login"}, status_code=400)
-    s = _session(inp.session_id, inp.login)
+    s = _auth_session(inp.token)
+    if s is None:
+        return JSONResponse({"error": "invalid or expired session"}, status_code=401)
     if s["pending"]:
         return JSONResponse({"error": "confirm or cancel the pending action first"}, status_code=409)
+    if not _rate_ok(s):
+        return JSONResponse({"error": "rate limit exceeded; slow down"}, status_code=429)
     s["history"].append({"role": "user", "content": inp.message})
     try:
-        events, pending = agent.run(s["history"], _toolbox(inp.login))
-    except Exception as e:  # surface provider/key errors to the UI instead of 500
-        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+        events, pending = agent.run(s["history"], ToolBox(CON, IDX, s["auth"]))
+    except Exception as e:
+        return JSONResponse({"error": f"The assistant is temporarily unavailable ({type(e).__name__}). Please retry."},
+                            status_code=502)
     s["pending"] = pending
     return {"events": events, "awaiting_confirmation": pending is not None}
 
 
 @app.post("/confirm")
 def confirm(inp: ConfirmIn):
-    s = SESSIONS.get(inp.session_id)
-    if not s or not s["pending"]:
+    s = _auth_session(inp.token)
+    if s is None:
+        return JSONResponse({"error": "invalid or expired session"}, status_code=401)
+    if not s["pending"]:
         return JSONResponse({"error": "no pending action"}, status_code=400)
     pending = s["pending"]
     s["pending"] = None
     try:
-        events, new_pending = agent.confirm(s["history"], _toolbox(inp.login), pending, inp.approved)
+        events, new_pending = agent.confirm(s["history"], ToolBox(CON, IDX, s["auth"]), pending, inp.approved)
     except Exception as e:
-        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+        return JSONResponse({"error": f"The assistant is temporarily unavailable ({type(e).__name__}). Please retry."},
+                            status_code=502)
     s["pending"] = new_pending
     return {"events": events, "awaiting_confirmation": new_pending is not None}
 
 
 @app.get("/proactive")
-def proactive_feed(login: str):
-    if MOCK_SESSIONS.get(login, None) is None or MOCK_SESSIONS[login].is_customer:
+def proactive_feed(token: str):
+    s = _auth_session(token)
+    if s is None:
+        return JSONResponse({"error": "invalid or expired session"}, status_code=401)
+    if s["auth"].is_customer:
         return JSONResponse({"error": "staff only"}, status_code=403)
     return {"items": proactive.attention_feed(CON)}
 

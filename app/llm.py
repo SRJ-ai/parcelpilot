@@ -14,6 +14,7 @@ from openai import OpenAI, RateLimitError, APIStatusError, APIConnectionError
 load_dotenv()
 
 GROQ_BASE = "https://api.groq.com/openai/v1"
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "45"))
 _groq_clients = None
 _rr = 0
 
@@ -38,7 +39,9 @@ def _groq_keys() -> list[str]:
 def _clients():
     global _groq_clients
     if _groq_clients is None:
-        _groq_clients = [OpenAI(base_url=GROQ_BASE, api_key=k) for k in _groq_keys()]
+        # max_retries=0: we do our own key failover, so the SDK must not silently retry.
+        _groq_clients = [OpenAI(base_url=GROQ_BASE, api_key=k, timeout=LLM_TIMEOUT, max_retries=0)
+                         for k in _groq_keys()]
     return _groq_clients
 
 
@@ -48,7 +51,7 @@ def chat(messages, tools):
     if os.getenv("LLM_PROVIDER", "groq").lower() == "ollama":
         # OLLAMA_API_KEY is the bearer for hosted Ollama Cloud; "ollama" is fine for local.
         c = OpenAI(base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
-                   api_key=os.getenv("OLLAMA_API_KEY", "ollama"))
+                   api_key=os.getenv("OLLAMA_API_KEY", "ollama"), timeout=LLM_TIMEOUT, max_retries=1)
         return c.chat.completions.create(model=os.getenv("OLLAMA_MODEL", "qwen2.5"), **kwargs)
 
     global _rr

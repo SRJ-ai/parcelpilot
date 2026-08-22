@@ -5,11 +5,18 @@ used so access scoping is a clean WHERE clause and calculations are auditable.
 """
 import re
 import sqlite3
+import threading
 import openpyxl
 from pypdf import PdfReader
 from rank_bm25 import BM25Okapi
 
 from app.config import DATA_DIR, DOCUMENTS, WORKBOOK
+
+# One in-memory SQLite connection is shared across request threads (check_same_thread
+# is off), and SQLite forbids concurrent use of a single connection. Serialize every
+# access through this lock. ponytail: global DB lock, split per-table if throughput
+# ever matters — at this data size it never will.
+DB_LOCK = threading.RLock()
 
 # ---------- structured data ----------
 

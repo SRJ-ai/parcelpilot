@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timezone
 
 from app.auth import AuthContext, can_write
+from app.ingest import DB_LOCK
 from app.reliability import resolve_terms, cancellation, service_credit, sla_breach
 
 READ_ENTITIES = ("accounts", "orders", "tickets")
@@ -49,7 +50,8 @@ class ToolBox:
         sql = f"SELECT * FROM {entity}"
         if where:
             sql += " WHERE " + " AND ".join(where)
-        rows = [dict(r) for r in self.con.execute(sql, params).fetchall()]
+        with DB_LOCK:
+            rows = [dict(r) for r in self.con.execute(sql, params).fetchall()]
         return {"entity": entity, "count": len(rows), "rows": rows}
 
     def compute_policy_outcome(self, kind: str, order_id: str | None = None,
@@ -65,8 +67,9 @@ class ToolBox:
             t = self._scoped_ticket(ticket_id)
             if t is None:
                 return {"error": f"ticket '{ticket_id}' not found or not in your account."}
-            acct = self.con.execute("SELECT plan FROM accounts WHERE account_id=?",
-                                    (t["account_id"],)).fetchone()
+            with DB_LOCK:
+                acct = self.con.execute("SELECT plan FROM accounts WHERE account_id=?",
+                                        (t["account_id"],)).fetchone()
             if not severity:
                 return {"error": "severity (P1/P2/P3) required for sla_breach; classify from the policy first."}
             return {"kind": kind, "ticket_id": ticket_id,
@@ -91,18 +94,20 @@ class ToolBox:
     def commit_write(self, name: str, args: dict) -> dict:
         if name not in WRITE_TOOLS or not can_write(self.auth, name):
             return {"error": "action not permitted."}
-        self.con.execute(
-            "INSERT INTO actions (kind, payload, created_at) VALUES (?,?,?)",
-            (name, json.dumps(args), datetime.now(timezone.utc).isoformat()),
-        )
-        self.con.commit()
-        aid = self.con.execute("SELECT last_insert_rowid()").fetchone()[0]
+        with DB_LOCK:
+            cur = self.con.execute(
+                "INSERT INTO actions (kind, payload, created_at) VALUES (?,?,?)",
+                (name, json.dumps(args), datetime.now(timezone.utc).isoformat()),
+            )
+            self.con.commit()
+            aid = cur.lastrowid
         return {"committed": True, "action": name, "ref": f"ACT-{aid:04d}", "args": args}
 
     # ---------- helpers ----------
 
     def _scoped_order(self, oid):
-        r = self.con.execute("SELECT * FROM orders WHERE order_id=?", (oid,)).fetchone()
+        with DB_LOCK:
+            r = self.con.execute("SELECT * FROM orders WHERE order_id=?", (oid,)).fetchone()
         if r is None:
             return None
         r = dict(r)
@@ -111,7 +116,8 @@ class ToolBox:
         return r
 
     def _scoped_ticket(self, tid):
-        r = self.con.execute("SELECT * FROM tickets WHERE ticket_id=?", (tid,)).fetchone()
+        with DB_LOCK:
+            r = self.con.execute("SELECT * FROM tickets WHERE ticket_id=?", (tid,)).fetchone()
         if r is None:
             return None
         r = dict(r)
@@ -121,7 +127,8 @@ class ToolBox:
 
 
 def _columns(con, table):
-    return [r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()]
+    with DB_LOCK:
+        return [r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()]
 
 
 def _describe(name, args):
