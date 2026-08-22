@@ -77,8 +77,28 @@ def run(history, toolbox: ToolBox):
 
         if not resp.tool_calls:
             final_text = resp.content or ""
-            ev = {"type": "final", "text": final_text}
             trust = verify.check(evidence, final_text)
+            if trust is not None and not trust["ok"]:
+                # Abstain: a hedged wrong answer is worse than none for a financial agent.
+                # Withhold the draft, auto-file an internal review escalation, route to a human.
+                ref = None
+                try:
+                    r = toolbox.commit_write("create_escalation", {
+                        "severity": "review",
+                        "reason": f"Auto-escalated: answer grounding {trust['grounded']:.0%} below bar. "
+                                  f"{trust.get('note', '')}".strip(),
+                    })
+                    ref = r.get("ref")
+                except Exception:
+                    pass
+                obs.event("abstained", grounded=round(trust["grounded"], 2), escalate=trust["escalate"], ref=ref)
+                msg = ("I'm not confident this answer is fully supported by our current sources, so I won't "
+                       "risk a wrong response. I've flagged it for a human support agent to review"
+                       + (f" (ref {ref})" if ref else "") + ", who will follow up.")
+                events.append({"type": "final", "text": msg, "trust": trust,
+                               "abstained": True, "withheld": final_text, "escalation_ref": ref})
+                return events, None
+            ev = {"type": "final", "text": final_text}
             if trust is not None:
                 ev["trust"] = trust
             events.append(ev)

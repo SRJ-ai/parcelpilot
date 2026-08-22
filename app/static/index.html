@@ -145,6 +145,10 @@ select:hover { border-color: var(--ink-3); }
 .trust.ok { color: var(--ok); background: var(--ok-soft); font-weight: 550; }
 .trust.warn { color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn); align-items: flex-start; }
 .trust.warn svg { margin-top: 1px; }
+.bubble.abstained { color: var(--ink-2); font-style: italic; }
+.handoff { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--accent); background: var(--accent-soft); padding: 6px 11px; border-radius: 8px; margin: 6px 0 2px; font-weight: 550; }
+.handoff svg { width: 14px; height: 14px; flex: none; }
+.handoff .ref { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .errline { font-size: 13px; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger); border-radius: 8px; padding: 9px 12px; margin-bottom: 10px; }
 
 .composer { border-top: 1px solid var(--line); background: var(--panel); padding: 14px 0 18px; }
@@ -302,12 +306,20 @@ async function render(events, wrap) {
       const d = document.createElement("div"); d.className = "chip note"; d.textContent = "Action cancelled";
       wrap.appendChild(d);
     } else if (ev.type === "final") {
-      const b = document.createElement("div"); b.className = "bubble"; b.innerHTML = md(ev.text); wrap.appendChild(b);
+      const b = document.createElement("div"); b.className = "bubble" + (ev.abstained ? " abstained" : "");
+      b.innerHTML = md(ev.text); wrap.appendChild(b);
+      if (ev.abstained) wrap.appendChild(handoffPill(ev.escalation_ref));
       if (ev.trust) wrap.appendChild(trustBadge(ev.trust));
     }
     if (auto) toBottom();
     await sleep(ev.type === "tool_call" ? 320 : 120);
   }
+}
+
+function handoffPill(ref) {
+  const d = document.createElement("div"); d.className = "handoff";
+  d.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11h-6M19 8l3 3-3 3"/></svg>Routed to a human agent${ref ? ` · <span class="ref">${esc(ref)}</span>` : ""}`;
+  return d;
 }
 
 function trustBadge(t) {
