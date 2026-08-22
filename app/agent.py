@@ -8,7 +8,7 @@ so the guarantee holds even if the model forgets to ask.
 import json
 from app.config import SNAPSHOT_NOW
 from app.tools import ToolBox, WRITE_TOOLS, TOOL_SPECS
-from app import llm, obs
+from app import llm, obs, verify
 
 READ_TOOLS = {"search_documents", "lookup_data", "compute_policy_outcome"}
 MAX_STEPS = 8
@@ -61,6 +61,7 @@ def run(history, toolbox: ToolBox):
     """Drive the loop until a final answer or a confirmation pause.
     Returns (events, pending). pending is None, or a dict to resume with confirm()."""
     events = []
+    evidence = []  # tool results this turn, fed to the grounding verifier
     _trim(history)
     for _ in range(MAX_STEPS):
         resp = llm.chat(history, TOOL_SPECS).choices[0].message
@@ -73,7 +74,12 @@ def run(history, toolbox: ToolBox):
         history.append(msg)
 
         if not resp.tool_calls:
-            events.append({"type": "final", "text": resp.content or ""})
+            final_text = resp.content or ""
+            ev = {"type": "final", "text": final_text}
+            trust = verify.check(evidence, final_text)
+            if trust is not None:
+                ev["trust"] = trust
+            events.append(ev)
             return events, None
 
         for tc in resp.tool_calls:
@@ -87,7 +93,9 @@ def run(history, toolbox: ToolBox):
 
             if name in READ_TOOLS:
                 result = getattr(toolbox, name)(**args)
-                history.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(result)})
+                payload = json.dumps(result)
+                history.append({"role": "tool", "tool_call_id": tc.id, "content": payload})
+                evidence.append(payload)
                 events.append({"type": "tool_result", "name": name})
             elif name in WRITE_TOOLS:
                 preview = toolbox.preview_write(name, args)

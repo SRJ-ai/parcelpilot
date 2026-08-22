@@ -26,6 +26,11 @@ or action erodes the team's trust. It is addressed structurally, not with a disc
   breached SLAs are stated plainly and escalated.
 - **Confirmation gate in the orchestrator** — state-changing actions cannot fire without explicit
   user confirmation, independent of whether the model "remembered" to ask.
+- **Answer-grounding self-check** — before a substantive answer reaches the user, a strict second
+  pass (`app/verify.py`) judges whether every factual/policy/numeric claim is supported by the tool
+  evidence gathered that turn. Grounded answers get a "Verified against sources" badge; ungrounded
+  or over-reaching ones get a visible caution that steers toward human escalation. It fails open
+  (a verifier hiccup never blocks an answer) and is toggleable via `GROUNDING_CHECK`.
 - **Access control in the tool layer** — a prompt-injection or a customer asking for another
   account's data returns nothing; it is not a model instruction that can be talked around.
 
@@ -41,9 +46,11 @@ flagged for human confirmation.
 
 ## What I would build next (prioritised)
 
-1. **Retrieval eval harness + answer-grounding checks.** The single biggest trust lever: a labelled
-   question set with expected sources/answers, run in CI, plus a check that every factual claim in a
-   response traces to a retrieved chunk. Prevents silent regressions as policies change.
+1. **Retrieval eval harness (building on the shipped grounding check).** The answer-grounding
+   self-check (§ above) already flags per-answer ungrounded claims at runtime. The next step is an
+   offline, labelled question set with expected sources/answers, run in CI, to catch silent
+   regressions across the whole corpus as policies change — turning per-turn grounding into a
+   measurable, tracked quality gate.
 2. **Real auth + audit log.** Replace the mock role switcher with SSO/session auth, persist actions
    to a durable store, and log every tool call, source cited, and confirmation — for compliance and
    for debugging "why did it say that".

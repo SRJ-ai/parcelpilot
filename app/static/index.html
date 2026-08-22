@@ -140,6 +140,11 @@ select:hover { border-color: var(--ink-3); }
 .committed { font-size: 13px; color: var(--ok); display: flex; align-items: center; gap: 7px; margin: 2px 0 8px; }
 .committed svg { width: 15px; height: 15px; }
 .committed .ref { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.trust { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; padding: 6px 11px; border-radius: 8px; margin: 6px 0 2px; line-height: 1.4; }
+.trust svg { width: 14px; height: 14px; flex: none; }
+.trust.ok { color: var(--ok); background: var(--ok-soft); font-weight: 550; }
+.trust.warn { color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn); align-items: flex-start; }
+.trust.warn svg { margin-top: 1px; }
 .errline { font-size: 13px; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger); border-radius: 8px; padding: 9px 12px; margin-bottom: 10px; }
 
 .composer { border-top: 1px solid var(--line); background: var(--panel); padding: 14px 0 18px; }
@@ -298,10 +303,24 @@ async function render(events, wrap) {
       wrap.appendChild(d);
     } else if (ev.type === "final") {
       const b = document.createElement("div"); b.className = "bubble"; b.innerHTML = md(ev.text); wrap.appendChild(b);
+      if (ev.trust) wrap.appendChild(trustBadge(ev.trust));
     }
     if (auto) toBottom();
     await sleep(ev.type === "tool_call" ? 320 : 120);
   }
+}
+
+function trustBadge(t) {
+  const d = document.createElement("div");
+  if (t.ok) {
+    d.className = "trust ok";
+    d.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Verified against sources`;
+  } else {
+    d.className = "trust warn";
+    const note = t.note || "This answer may not be fully grounded in the sources — verify before relying on it.";
+    d.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4m0 4h.01"/><path d="M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg><span>${esc(note)}${t.escalate ? " Consider escalating to a human agent." : ""}</span>`;
+  }
+  return d;
 }
 
 function confirmCard(ev) {

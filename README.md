@@ -20,8 +20,9 @@ shared, access-controlled tool layer:
 
 The agent reasons over the supplied data pack with explicit **source precedence** (signed agreement
 > current policy/SOP > product docs > historical tickets, which are context-only), refuses to use
-deprecated documents, computes money/SLA decisions **deterministically in code**, and requires
-**explicit confirmation** before any state-changing action.
+deprecated documents, computes money/SLA decisions **deterministically in code**, requires
+**explicit confirmation** before any state-changing action, and runs an **answer-grounding self-check**
+that flags any answer whose claims aren't backed by the retrieved evidence.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and [PRODUCT.md](PRODUCT.md) for the product note.
 

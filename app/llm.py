@@ -45,9 +45,8 @@ def _clients():
     return _groq_clients
 
 
-def chat(messages, tools):
-    kwargs = dict(messages=messages, tools=tools, tool_choice="auto", temperature=0.0)
-
+def _call(**kwargs):
+    """Provider selection + Groq multi-key failover. Shared by chat() and complete()."""
     if os.getenv("LLM_PROVIDER", "groq").lower() == "ollama":
         # OLLAMA_API_KEY is the bearer for hosted Ollama Cloud; "ollama" is fine for local.
         c = OpenAI(base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
@@ -75,3 +74,12 @@ def chat(messages, tools):
             else:
                 raise
     raise last
+
+
+def chat(messages, tools):
+    return _call(messages=messages, tools=tools, tool_choice="auto", temperature=0.0)
+
+
+def complete(messages, temperature=0.0):
+    """Plain completion, no tools — used by the grounding verifier."""
+    return _call(messages=messages, temperature=temperature)

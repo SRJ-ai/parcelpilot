@@ -9,34 +9,36 @@ A single agent backend serving **two user contexts** over one shared data/tool l
 
 Both contexts share the same tools, retrieval index, and structured data. The **only** difference is the `AuthContext` passed into the tool layer, which decides what rows and documents are visible and which actions are allowed. Access control lives in code, never in the prompt.
 
-Stack: **Python 3.11 + FastAPI**, **Anthropic Claude** via the official SDK using the native tool-use loop (no agent framework), **SQLite** (loaded from the workbook at startup) for structured data, **in-memory BM25** over section-chunked documents for retrieval, and a **vanilla HTML/JS** chat page with tool-activity badges and a confirmation modal.
+Stack: **Python 3.11 + FastAPI**, an **OpenAI-compatible LLM client** driving the native tool-calling loop (no agent framework) — **Groq** (hosted, `openai/gpt-oss-120b`) by default, with an **Ollama** backend (local or Ollama Cloud) as a drop-in offline fallback via the same wire format, **SQLite** (loaded from the workbook at startup) for structured data, **in-memory BM25** over section-chunked documents for retrieval, and a **vanilla HTML/JS** chat page with tool-activity badges and a confirmation modal.
 
 ## 2. Agent design
 
-A single orchestrating agent driving Claude's native tool-use loop:
+A single orchestrating agent driving the model's native tool-calling loop:
 
 1. Receive the user message plus the server-side `AuthContext` (role + account scope).
-2. Claude plans and requests tools. The backend executes read/compute tools immediately, injecting the auth scope.
-3. When Claude requests a **state-changing** tool, the backend does **not** execute it. It returns the proposed action to the UI as a preview and pauses. The action runs only after the user explicitly confirms (see §6).
-4. Loop until Claude produces a final answer, or a stop condition (escalation, missing data, unsupported exception) is hit.
+2. The model plans and requests tools. The backend executes read/compute tools immediately, injecting the auth scope.
+3. When the model requests a **state-changing** tool, the backend does **not** execute it. It returns the proposed action to the UI as a preview and pauses. The action runs only after the user explicitly confirms (see §6).
+4. Loop until the model produces a final answer, or a stop condition (escalation, missing data, unsupported exception, or the step limit) is hit.
 
 The system prompt encodes: the snapshot time, the source-precedence rule, the escalation triggers, and the "state uncertainty, don't hide it" behaviour from the policies. Crucially, the prompt states the *rules*; the tool layer *enforces* the ones that must be deterministic (access scope, fee/credit math, confirmation).
 
-**Why no framework (LangChain/LlamaIndex):** the corpus is six short documents and the data is ~20 rows. A framework would add dependencies and indirection without buying anything. The native Anthropic tool loop gives full control over the two things that actually matter here — the confirmation gate and access scoping — which are awkward to bolt onto a generic agent runner.
+**Why no framework (LangChain/LlamaIndex):** the corpus is six short documents and the data is ~20 rows. A framework would add dependencies and indirection without buying anything. The native OpenAI-compatible tool loop gives full control over the two things that actually matter here — the confirmation gate and access scoping — which are awkward to bolt onto a generic agent runner.
+
+**Why an OpenAI-compatible client (Groq / Ollama):** both backends speak the same wire format, so one thin adapter (`app/llm.py`) covers a fast hosted default (Groq) and a zero-cost offline path (Ollama, local or Ollama Cloud) by swapping only a base URL and model name. Groq additionally supports multiple API keys with round-robin load-spreading and automatic fail-over on rate limits, so one throttled key never takes the app down.
 
 ## 3. Tool design
 
 Four tools, each receiving `AuthContext` from the server (never from the model):
 
-1. **`search_documents(query, doc_types?)`** — retrieval over policies, SOPs, product docs, and agreements.
-   - Returns section chunks with authority metadata: `authority_tier`, `status` (current/deprecated), `effective_date`, and `owner_account_id` for agreements.
-   - Deprecated documents (v2) are excluded by default and only surfaced if a caller explicitly asks for historical policy.
+1. **`search_documents(query, include_deprecated=false)`** — retrieval over policies, SOPs, product docs, and agreements.
+   - Returns section chunks with authority metadata: `authority_tier`, `status` (current/deprecated), `effective` date, and `owner_account_id` for agreements.
+   - Deprecated documents (v2) are excluded by default and only surfaced if a caller explicitly passes `include_deprecated=true` (e.g. to compare against historical policy).
    - Agreement chunks are filtered by `owner_account_id`: a customer only retrieves their own agreement plus general policy; they can never retrieve another customer's contract.
 
 2. **`lookup_data(entity, filters)`** — structured lookup over `accounts`, `orders`, `tickets` in SQLite.
-   - Every query is rewritten with a scope predicate: customers get `WHERE account_id = :ctx_account`; staff get full access. Enforced in the query builder, so a prompt-injection asking for another account returns nothing.
+   - Every query is rewritten with a scope predicate: customers get `WHERE account_id = :ctx_account`; staff get full access. A customer-supplied `account_id` filter can never override their own scope. Enforced in the query builder, so a prompt-injection asking for another account returns nothing.
 
-3. **`compute_policy_outcome(kind, order_id?, ...)`** — deterministic calculators that combine order data with the *resolved* policy: cancellation-fee eligibility/amount, failed-pickup service-credit eligibility/amount, and SLA first-response-breach check. This is the "calculation" tool and it is where source precedence is applied in code rather than left to the model (see §5).
+3. **`compute_policy_outcome(kind, order_id?, ticket_id?, severity?)`** — deterministic calculators that combine order/ticket data with the *resolved* policy. `kind` is one of `cancellation`, `service_credit` (both need `order_id`), or `sla_breach` (needs `ticket_id` + `severity`). This is the "calculation" tool and it is where source precedence is applied in code rather than left to the model (see §5).
 
 4. **State-changing (mocked, confirmation-gated):** `create_escalation`, `update_ticket`, `create_followup_task`. These write to a local store and require explicit user confirmation before execution.
 
@@ -68,9 +70,13 @@ Conflicts are resolved **deterministically in code** wherever an action or numbe
 
 **Escalation triggers** (human judgment required): P1 or suspected security incident (e.g. TKT-505 API-key exposure), an already-breached first-response SLA (e.g. TKT-501, Northstar P1 target 15 min, created 10:30, breached by snapshot 11:00), any individual credit above INR 1,000 (manager approval), conflicting or insufficient data, and any exception not supported by an agreement or current policy.
 
+### 5.1 Grounding self-verification
+
+Deterministic calculators keep the *numbers* correct, but the model still writes the prose around them. For a financial support agent, a confidently wrong sentence is the real adoption risk. So before a substantive answer reaches the user, a second strict pass (`app/verify.py`) judges the drafted answer against the tool evidence gathered that turn and returns `{grounded (0–1), supported, escalate, note}`. The verdict rides back on the final response and the UI shows it: a quiet **"Verified against sources"** pill when the answer is fully grounded, or a **caution banner** (with the reason and an escalation nudge) when it is not. The check fails open — a verifier hiccup never blocks an answer — is logged with a grounding score, and can be disabled with `GROUNDING_CHECK=0`. This turns "trust" from a prompt instruction into a measured, visible property of every answer.
+
 ## 6. Confirmation before actions
 
-The confirmation gate lives in the orchestration layer, not the prompt. When Claude requests a state-changing tool, the backend intercepts the `tool_use`, returns a structured **preview** ("Escalate TKT-501 to P1, reason: SLA breach — confirm?") to the UI, and stops the loop. The action executes only when the user clicks confirm; on cancel, the decision is fed back to Claude as a tool result so it can respond appropriately. This makes the guarantee independent of whether the model "remembered" to ask.
+The confirmation gate lives in the orchestration layer, not the prompt. When the model requests a state-changing tool, the backend intercepts the tool call, returns a structured **preview** ("Escalate TKT-501 to P1, reason: SLA breach — confirm?") to the UI, and stops the loop. The action executes only when the user clicks confirm; on cancel, the decision is fed back to the model as a tool result so it can respond appropriately. This makes the guarantee independent of whether the model "remembered" to ask.
 
 ## 7. Access control and privacy
 
@@ -84,7 +90,7 @@ Because scoping happens in the tool layer, a prompt-injection or a customer aski
 
 ## 8. Interface
 
-A single-page chat UI served by FastAPI: streaming responses, a **tool-activity badge** showing which tool is running (`searching documents`, `looking up ORD-1001`, `computing credit`), a **confirmation modal** for state-changing actions, and a **role switcher** to mock the two contexts. Internal (staff) sessions additionally get a **Proactive Attention panel** (Problem 1): deterministic rules over the live data surface open P1s, SLA breaches, security tickets, and clusters of the same known issue (e.g. repeated bulk-upload tickets → KI-208), ranked by urgency.
+A single-page chat UI served by FastAPI: an animated **tool-activity trace** showing each tool as it runs (`search_documents("...")`, `lookup_data(orders, ...)`, `compute_policy_outcome(...)`) with a live/done state per step, a **confirmation card** for state-changing actions, and a **role switcher** to mock the two contexts. The client renders the model's markdown (tables, citations, lists) with a small self-contained parser. Internal (staff) sessions additionally get a **Proactive Attention panel** (Problem 1): deterministic rules over the live data surface open P1s, SLA breaches, security tickets, and clusters of the same known issue (e.g. repeated bulk-upload tickets → KI-208), ranked by urgency. (Responses render the full tool trace then the final answer; token streaming is a listed next step, not yet implemented.)
 
 ## 9. Major technical trade-offs
 
@@ -93,3 +99,17 @@ A single-page chat UI served by FastAPI: streaming responses, a **tool-activity 
 - **Deterministic calculators over model arithmetic** — money and SLA decisions are computed in code so they are correct, testable, and reproducible; the model orchestrates and explains but does not do the math that drives an action.
 - **No agent framework** — the native tool loop keeps the confirmation gate and access scoping explicit and under our control.
 - **Confirmation enforced in orchestration, not prompt** — the safety guarantee cannot be defeated by the model forgetting to ask.
+
+## 10. Production hardening
+
+Beyond the assessment core, the app carries the controls a real deployment needs:
+
+- **Server-issued session tokens** — identity is established once at `POST /session` (the mock authentication boundary) and returned as an opaque token; `/chat`, `/confirm`, and `/proactive` accept only that token, and the `AuthContext` is looked up server-side. A client cannot declare its own role or account in the request body — closing the impersonation hole where a customer could simply send `{"login": "staff_agent"}`.
+- **Thread-safe data access** — the shared in-memory SQLite connection is serialized behind a lock (SQLite forbids concurrent use of one connection).
+- **Bounded conversation history** — old turns are dropped at a `user` boundary (never orphaning a tool response) to cap token cost and context growth.
+- **Resilience** — LLM request timeout with no double-retry (key fail-over is ours), and a graceful, user-facing message on provider failure.
+- **Abuse controls** — request-body validation (message length), per-token rate limiting, session TTL and eviction.
+- **Observability** — structured logs with a per-request id (`X-Request-ID`), an HTTP access line with latency, and tool-call / action / grounding traces.
+- **Operational** — `/health` endpoint, security headers + CSP, a non-root container with a healthcheck, and CI running the offline test suite on every push.
+
+The trust boundary and limits are covered by HTTP/auth integration tests (with the LLM mocked), so the impersonation defence and rate limits are verified, not assumed.
