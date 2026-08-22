@@ -63,15 +63,23 @@ policy ignored, wrong historical resolutions, cross-account isolation) and run w
 uv run --group dev pytest -q
 ```
 
-## Deploy (Docker)
+## Deploy
+
+**One-click (Render blueprint).** This repo ships a [`render.yaml`](render.yaml). In Render:
+*New → Blueprint → select this repo → set `GROQ_API_KEY`*. It builds the Dockerfile, wires the
+`/health` check, and injects `PORT` automatically — no manual dashboard config.
+
+**Any Docker host (Railway / Fly / Koyeb / HF Spaces).**
 
 ```bash
 docker build -t parcelpilot .
 docker run -p 8000:8000 -e GROQ_API_KEY=sk-... parcelpilot
 ```
 
-On Render / Railway / Fly: point at this Dockerfile and set `GROQ_API_KEY` (and optionally
-`GROQ_MODEL`). The host's `PORT` is picked up automatically.
+Point the host at this Dockerfile and set `GROQ_API_KEY` (optionally `GROQ_MODEL`). The container
+runs as a non-root user, reads the host's `PORT`, and exposes a `/health` endpoint used by the
+built-in `HEALTHCHECK`. The production start command (`uv run --no-dev uvicorn app.main:app`) and the
+healthcheck are verified to boot with prod-only dependencies.
 
 ## Mock logins (role switcher in the UI)
 

@@ -1,0 +1,22 @@
+# Render Blueprint — one-click deploy of the ParcelPilot AI Support System.
+# In Render: New → Blueprint → point at this repo. It builds the Dockerfile and
+# starts the service; you only supply GROQ_API_KEY (marked sync:false so it is
+# entered securely in the dashboard, never committed).
+#
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: parcelpilot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: GROQ_API_KEY      # set in the Render dashboard (secret)
+        sync: false
+      - key: GROQ_MODEL        # optional override; matches the app default
+        value: openai/gpt-oss-120b
+      - key: LLM_PROVIDER
+        value: groq
+      # Render injects PORT automatically; the container's CMD reads it.
