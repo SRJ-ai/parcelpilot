@@ -1,0 +1,35 @@
+name: Deploy
+
+# Test, then deploy to the OCI instance over SSH on every push to main.
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Test suite (offline)
+        run: uv run --group dev pytest -q
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.OCI_HOST }}
+          username: ${{ secrets.OCI_USER }}
+          key: ${{ secrets.OCI_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -e
+            cd /opt/parcelpilot
+            sudo git pull --ff-only
+            sudo /root/.local/bin/uv sync
+            sudo systemctl restart parcelpilot
+            sleep 6
+            curl -sf http://localhost/health
