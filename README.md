@@ -88,3 +88,23 @@ On Render / Railway / Fly: point at this Dockerfile and set `GROQ_API_KEY` (and 
   is in-memory and resets on restart.
 - Dataset snapshot time (`2026-08-16 11:00 Asia/Kolkata`, from the workbook README) is the single
   reference "now" for every time-based calculation.
+
+## AI tool usage
+
+This project was built with an AI coding assistant (Claude, via the Hermes agent CLI) used as a
+pair-programmer, not an autopilot. Concretely:
+
+- **Design & trade-offs** — I drove the architecture decisions (native tool loop over a framework,
+  authority tiers, deterministic calculators, defence-in-depth for trust); the assistant was used to
+  pressure-test them and draft alternatives I then accepted or rejected.
+- **Implementation** — used for scaffolding modules (retrieval, tools, orchestrator, UI) and
+  boilerplate (tool schemas, FastAPI handlers), with every generated block reviewed, edited, and
+  verified against the data pack before it landed.
+- **Tests** — the golden-trap suite was co-written to pin the specific contradictions in the corpus
+  (agreement overrides, deprecated policy, wrong historical resolutions, cross-account isolation);
+  I chose *what* to test, the assistant helped write the cases.
+- **Docs** — [ARCHITECTURE.md](ARCHITECTURE.md) and [PRODUCT.md](PRODUCT.md) were drafted with the
+  assistant and edited by me for accuracy; claims were checked against the running code.
+
+Judgment calls — what to build, what to leave out, how the product should behave, and which claims
+are true — are mine. The assistant accelerated the work; it didn't make the decisions.
