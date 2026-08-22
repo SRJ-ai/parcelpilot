@@ -44,17 +44,25 @@ def _guess_severity(text: str) -> str:
     return "P3"
 
 
-def _tokens(text: str) -> list[str]:
-    return [w.lower() for w in _WORD.findall(text or "") if w.lower() not in _STOP and len(w) > 2]
+def _tokens(text: str, extra_stop: set[str]) -> list[str]:
+    out = []
+    for w in _WORD.findall(text or ""):
+        lw = w.lower()
+        if len(lw) <= 2 or lw in _STOP or lw in extra_stop:
+            continue
+        if lw.isdigit():   # bare numbers ('500', '4200') are not themes
+            continue
+        out.append(lw)
+    return out
 
 
-def _keys(text: str) -> set[str]:
-    """Candidate theme keys for one ticket: significant unigrams + adjacent bigrams.
-    Bigrams give specificity ('bulk upload' beats 'bulk'); unigrams give recall."""
-    toks = _tokens(text)
-    keys = set(toks)
-    keys.update(f"{a} {b}" for a, b in zip(toks, toks[1:]))
-    return keys
+def _keys(text: str, extra_stop: set[str]) -> set[str]:
+    """Candidate theme keys for one ticket: adjacent bigrams of significant tokens.
+    Bigrams give the specificity that avoids false themes from generic single words
+    ('bulk upload' / 'shipment creation' cluster meaningfully; 'shipment' or '500'
+    would not). Discovery is still fully data-driven — no fixed theme list."""
+    toks = _tokens(text, extra_stop)
+    return {f"{a} {b}" for a, b in zip(toks, toks[1:])}
 
 
 def _match_known(text: str):
@@ -64,26 +72,24 @@ def _match_known(text: str):
     return None, None
 
 
-def _clusters(tickets: list[dict]) -> list[dict]:
+def _clusters(tickets: list[dict], account_names: set[str]) -> list[dict]:
     """Discover recurring themes across tickets, entirely from the text — no fixed theme
-    list. A cluster is any key shared by >=2 tickets; overlapping keys are collapsed to
-    the most specific representative so we surface one item per real theme."""
+    list. A cluster is any theme key shared by >=2 tickets; overlapping keys are collapsed
+    to the most specific representative so we surface one item per real theme."""
+    extra_stop = account_names
     by_key_tickets = defaultdict(set)   # key -> {ticket_id}
-    key_is_bigram = {}
     for t in tickets:
         blob = f"{t['subject']} {t.get('description', '')}"
-        for k in _keys(blob):
+        for k in _keys(blob, extra_stop):
             by_key_tickets[k].add(t["ticket_id"])
-            key_is_bigram[k] = " " in k
 
-    # Keep only recurring keys (>=2 tickets), then dedupe keys that cover the same (or a
-    # subset of the same) ticket set — preferring bigrams, then longer strings.
+    # Keep only recurring keys (>=2 tickets), then dedupe keys covering the same (or a
+    # subset of the same) ticket set — preferring the longer, more descriptive key.
     recurring = {k: tids for k, tids in by_key_tickets.items() if len(tids) >= 2}
     chosen: dict[frozenset, str] = {}
-    for k in sorted(recurring, key=lambda k: (key_is_bigram[k], len(k)), reverse=True):
+    for k in sorted(recurring, key=len, reverse=True):
         tids = frozenset(recurring[k])
-        # skip if an already-chosen key's ticket set is a superset of this one
-        if any(tids <= existing for existing in chosen):
+        if any(tids <= existing for existing in chosen):  # already covered by a longer key
             continue
         chosen[tids] = k
 
@@ -123,7 +129,15 @@ def _clusters(tickets: list[dict]) -> list[dict]:
 def attention_feed(con) -> list[dict]:
     with DB_LOCK:
         all_tickets = [dict(r) for r in con.execute("SELECT * FROM tickets").fetchall()]
-        plans = {r["account_id"]: r["plan"] for r in con.execute("SELECT account_id, plan FROM accounts").fetchall()}
+        acct_rows = [dict(r) for r in con.execute("SELECT account_id, plan, account_name FROM accounts").fetchall()]
+    plans = {r["account_id"]: r["plan"] for r in acct_rows}
+    # Account names (and their word parts) are identifiers, not themes — exclude them so
+    # 'Northstar' can't masquerade as a recurring issue.
+    account_names = set()
+    for r in acct_rows:
+        for w in _WORD.findall(r.get("account_name") or ""):
+            if len(w) > 2:
+                account_names.add(w.lower())
     open_tickets = [t for t in all_tickets if t["status"] == "open"]
     items = []
 
@@ -152,7 +166,7 @@ def attention_feed(con) -> list[dict]:
 
     # ---- emergent clustering (all tickets, so a recurrence spanning open + recently
     # closed tickets is visible; a one-off open ticket never clusters with itself) ----
-    items.extend(_clusters(all_tickets))
+    items.extend(_clusters(all_tickets, account_names))
 
     # ---- operational: outstanding carrier-fault pickups (service credit likely owed) ----
     with DB_LOCK:
