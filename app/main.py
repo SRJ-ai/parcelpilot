@@ -121,7 +121,10 @@ async def gate(request: Request, call_next):
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    # never cache the shell (inline JS lives here): users must not get a stale build
+    # that calls removed endpoints like the old /session.
+    return FileResponse(STATIC / "index.html",
+                        headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
 @app.get("/health")
