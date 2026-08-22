@@ -183,6 +183,11 @@ select:hover { border-color: var(--ink-3); }
 .handoff svg { width: 14px; height: 14px; flex: none; }
 .handoff .ref { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .errline { font-size: 13px; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger); border-radius: 8px; padding: 9px 12px; margin-bottom: 10px; }
+.errcard { border: 1px solid var(--danger); background: var(--danger-soft); border-radius: 10px; padding: 12px 14px; margin: 4px 0 8px; display: flex; flex-direction: column; gap: 10px; }
+.errcard .ec-msg { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--danger); }
+.errcard .ec-msg svg { width: 15px; height: 15px; flex: none; margin-top: 1px; }
+.errcard .ec-retry { align-self: flex-start; padding: 7px 16px; font-size: 13px; }
+.toks { font-size: 11px; color: var(--ink-3); font-family: var(--mono); font-variant-numeric: tabular-nums; margin-top: 6px; }
 
 .composer { border-top: 1px solid var(--line); background: var(--panel); padding: 14px 0 18px; }
 .composer .wrap { display: flex; gap: 10px; align-items: flex-end; }
@@ -382,6 +387,7 @@ async function render(events, wrap) {
       b.innerHTML = md(ev.text); wrap.appendChild(b);
       if (ev.abstained) wrap.appendChild(handoffPill(ev.escalation_ref));
       if (ev.trust) wrap.appendChild(trustBadge(ev.trust));
+      if (ev.tokens) { const t = document.createElement("div"); t.className = "toks"; t.textContent = ev.tokens.toLocaleString() + " tokens"; wrap.appendChild(t); }
     }
     if (auto) toBottom();
     await sleep(ev.type === "tool_call" ? 320 : 120);
@@ -423,7 +429,7 @@ async function decide(approved, card) {
   wrap.appendChild(typing);
   const r = await post("/confirm", { token: TOKEN, approved });
   typing.remove();
-  if (r.error) { wrap.innerHTML = `<div class="errline">${esc(r.error)}</div>`; return; }
+  if (r.error) { wrap.appendChild(errorCard(r.error, () => { wrap.remove(); decide(approved, card); })); return; }
   await render(r.events, wrap);
   if (IS_STAFF) { loadFeed(); loadAudit(); }
 }
@@ -435,21 +441,35 @@ async function post(url, body) {
   } catch (e) { return { error: String(e) }; }
 }
 
-async function send() {
-  const input = $("#input"); const text = input.value.trim();
-  if (!text || busy) return;
+function errorCard(message, onRetry) {
+  const d = document.createElement("div"); d.className = "errcard";
+  const rl = /rate ?limit/i.test(message);
+  d.innerHTML = `<div class="ec-msg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4m0 4h.01"/><path d="M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg><span>${esc(rl ? "The assistant is busy right now (rate limit)." : message)}</span></div>
+    <button class="btn primary ec-retry" type="button">Retry</button>`;
+  d.querySelector(".ec-retry").onclick = () => { d.remove(); onRetry(); };
+  return d;
+}
+
+async function sendMessage(text) {
+  if (busy) return;
   busy = true; $("#send").disabled = true;
-  addMsg("user", text); input.value = ""; input.style.height = "auto";
   const wrap = stepHolder();
   const typing = document.createElement("div"); typing.className = "typing"; typing.innerHTML = "<i></i><i></i><i></i>";
   wrap.appendChild(typing); toBottom();
   const r = await post("/chat", { token: TOKEN, message: text });
   typing.remove();
-  if (r.error) { wrap.innerHTML = `<div class="errline">${esc(r.error)}</div>`; }
+  if (r.error) { wrap.appendChild(errorCard(r.error, () => { wrap.remove(); sendMessage(text); })); }
   else await render(r.events, wrap);
   if (!wrap.children.length) wrap.remove();
   if (IS_STAFF) loadAudit();  // chat can log injection-flag / abstention events
-  busy = false; $("#send").disabled = false; input.focus();
+  busy = false; $("#send").disabled = false; $("#input").focus();
+}
+
+async function send() {
+  const input = $("#input"); const text = input.value.trim();
+  if (!text || busy) return;
+  addMsg("user", text); input.value = ""; input.style.height = "auto";
+  await sendMessage(text);
 }
 
 const EXAMPLES = {

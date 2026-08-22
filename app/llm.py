@@ -45,13 +45,32 @@ def _clients():
     return _groq_clients
 
 
+def _track(resp):
+    """Count token usage so the admin metrics can show it."""
+    try:
+        from app import obs
+        u = getattr(resp, "usage", None)
+        if u:
+            obs.incr("tokens.prompt", int(u.prompt_tokens or 0))
+            obs.incr("tokens.completion", int(u.completion_tokens or 0))
+            obs.incr("tokens.total", int(u.total_tokens or 0))
+    except Exception:
+        pass
+
+
+def _ollama(**kwargs):
+    c = OpenAI(base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+               api_key=os.getenv("OLLAMA_API_KEY", "ollama"), timeout=LLM_TIMEOUT, max_retries=1)
+    resp = c.chat.completions.create(model=os.getenv("OLLAMA_MODEL", "qwen2.5"), **kwargs)
+    _track(resp)
+    return resp
+
+
 def _call(**kwargs):
-    """Provider selection + Groq multi-key failover. Shared by chat() and complete()."""
+    """Provider selection + Groq multi-key failover, then Ollama Cloud as a last resort
+    when every Groq key is rate-limited — so a throttle rarely reaches the user."""
     if os.getenv("LLM_PROVIDER", "groq").lower() == "ollama":
-        # OLLAMA_API_KEY is the bearer for hosted Ollama Cloud; "ollama" is fine for local.
-        c = OpenAI(base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
-                   api_key=os.getenv("OLLAMA_API_KEY", "ollama"), timeout=LLM_TIMEOUT, max_retries=1)
-        return c.chat.completions.create(model=os.getenv("OLLAMA_MODEL", "qwen2.5"), **kwargs)
+        return _ollama(**kwargs)
 
     global _rr
     clients = _clients()
@@ -63,16 +82,26 @@ def _call(**kwargs):
         try:
             resp = c.chat.completions.create(model=model, **kwargs)
             _rr = (_rr + off + 1) % n  # advance start so load spreads across keys
+            _track(resp)
             return resp
         except RateLimitError as e:
             last = e  # this key is throttled — try the next
-        except (APIConnectionError,) as e:
+        except APIConnectionError as e:
             last = e
         except APIStatusError as e:
             if e.status_code in (429, 500, 502, 503):
                 last = e
             else:
                 raise
+    # every Groq key exhausted — fall back to Ollama Cloud if a real key is configured
+    ok = os.getenv("OLLAMA_API_KEY")
+    if ok and ok != "ollama":
+        try:
+            from app import obs
+            obs.event("groq_exhausted_fallback_ollama")
+            return _ollama(**kwargs)
+        except Exception:
+            pass
     raise last
 
 

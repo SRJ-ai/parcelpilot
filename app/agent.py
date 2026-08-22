@@ -64,9 +64,13 @@ def run(history, toolbox: ToolBox):
     Returns (events, pending). pending is None, or a dict to resume with confirm()."""
     events = []
     evidence = []  # tool results this turn, fed to the grounding verifier
+    turn_tokens = 0
     _trim(history)
     for _ in range(MAX_STEPS):
-        resp = llm.chat(history, TOOL_SPECS).choices[0].message
+        completion = llm.chat(history, TOOL_SPECS)
+        if getattr(completion, "usage", None):
+            turn_tokens += int(completion.usage.total_tokens or 0)
+        resp = completion.choices[0].message
         msg = {"role": "assistant", "content": resp.content or ""}
         if resp.tool_calls:
             msg["tool_calls"] = [
@@ -99,7 +103,7 @@ def run(history, toolbox: ToolBox):
                 events.append({"type": "final", "text": msg, "trust": trust,
                                "abstained": True, "withheld": final_text, "escalation_ref": ref})
                 return events, None
-            ev = {"type": "final", "text": final_text}
+            ev = {"type": "final", "text": final_text, "tokens": turn_tokens}
             if trust is not None:
                 ev["trust"] = trust
             events.append(ev)
