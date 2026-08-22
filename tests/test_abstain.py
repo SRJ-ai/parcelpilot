@@ -32,12 +32,16 @@ def test_low_grounding_abstains_and_escalates(monkeypatch, tb):
     events, pending = agent.run(_history(), tb)
     final = [e for e in events if e["type"] == "final"][0]
     assert final["abstained"] is True
-    assert final["escalation_ref"] and final["escalation_ref"].startswith("ACT-")
+    # the handoff shows a ticket ref (visible to staff in the live tickets rail)
+    assert final["escalation_ref"] and final["escalation_ref"].startswith("RT-")
+    assert "ticket" in final["text"]
     assert final["withheld"] == "Your fees are all waived."          # draft kept for audit, not shown
     assert "flagged it for a human" in final["text"]
-    # the auto-escalation is recorded in the action store
+    # the auto-escalation is recorded in the action store, and a ticket lands in raised_tickets
     n = tb.con.execute("SELECT COUNT(*) FROM actions WHERE kind='create_escalation'").fetchone()[0]
     assert n == 1
+    t = tb.con.execute("SELECT account_id, subject FROM raised_tickets ORDER BY id DESC LIMIT 1").fetchone()
+    assert t is not None and t[1].startswith("[AI handoff]")
 
 
 def test_grounded_answer_is_shown(monkeypatch, tb):

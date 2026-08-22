@@ -85,7 +85,8 @@ def run(history, toolbox: ToolBox):
             trust = verify.check(evidence, final_text)
             if trust is not None and not trust["ok"]:
                 # Abstain: a hedged wrong answer is worse than none for a financial agent.
-                # Withhold the draft, auto-file an internal review escalation, route to a human.
+                # Withhold the draft, auto-file an internal review escalation AND raise a
+                # ticket so the human team sees it in their live tickets feed.
                 ref = None
                 try:
                     r = toolbox.commit_write("create_escalation", {
@@ -96,13 +97,30 @@ def run(history, toolbox: ToolBox):
                     ref = r.get("ref")
                 except Exception:
                     pass
-                obs.event("abstained", grounded=round(trust["grounded"], 2), escalate=trust["escalate"], ref=ref)
-                toolbox.audit("abstained", grounded=round(trust["grounded"], 2), ref=ref)
+                tref = None
+                try:
+                    question = ""
+                    for m in reversed(history):
+                        if m.get("role") == "user":
+                            question = m.get("content", "")
+                            break
+                    tref = toolbox.state.raise_ticket(
+                        toolbox.auth.account_id or "-", toolbox.auth.email or "-",
+                        "[AI handoff] Answer withheld — needs human review",
+                        (f"Customer asked: {question[:400]}\n"
+                         f"Grounding {trust['grounded']:.0%} below bar. {trust.get('note', '')}".strip()))
+                except Exception:
+                    pass
+                shown = tref or ref
+                obs.event("abstained", grounded=round(trust["grounded"], 2),
+                          escalate=trust["escalate"], ref=ref, ticket=tref)
+                toolbox.audit("abstained", grounded=round(trust["grounded"], 2),
+                              ref=ref, ticket=tref)
                 msg = ("I'm not confident this answer is fully supported by our current sources, so I won't "
                        "risk a wrong response. I've flagged it for a human support agent to review"
-                       + (f" (ref {ref})" if ref else "") + ", who will follow up.")
+                       + (f" (ticket {shown})" if shown else "") + ", who will follow up.")
                 events.append({"type": "final", "text": msg, "trust": trust,
-                               "abstained": True, "withheld": final_text, "escalation_ref": ref})
+                               "abstained": True, "withheld": final_text, "escalation_ref": shown})
                 return events, None
             ev = {"type": "final", "text": final_text, "tokens": turn_tokens}
             if trust is not None:
