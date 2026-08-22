@@ -61,8 +61,8 @@ select {
 select:hover { border-color: var(--ink-3); }
 .signout { margin-top: 9px; font: inherit; font-size: 12px; color: var(--ink-2); background: transparent; border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px; cursor: pointer; width: 100%; transition: border-color .15s, color .15s; }
 .signout:hover { border-color: var(--danger); color: var(--danger); }
-.loginwrap { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: var(--bg); padding: 24px; }
-.logincard { width: 100%; max-width: 360px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 26px 24px; display: flex; flex-direction: column; }
+.loginwrap { position: fixed; inset: 0; z-index: 50; display: flex; overflow-y: auto; background: var(--bg); padding: 24px; }
+.logincard { width: 100%; max-width: 360px; margin: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 26px 24px; display: flex; flex-direction: column; }
 .lg-brand { display: flex; align-items: center; gap: 9px; font-size: 18px; font-weight: 650; letter-spacing: -0.02em; }
 .lg-brand svg { width: 24px; height: 24px; color: var(--accent); }
 .lg-sub { font-size: 13px; color: var(--ink-3); margin: 4px 0 18px; }
