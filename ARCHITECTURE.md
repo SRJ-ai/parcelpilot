@@ -11,6 +11,34 @@ Both contexts share the same tools, retrieval index, and structured data. The **
 
 Stack: **Python 3.11 + FastAPI**, an **OpenAI-compatible LLM client** driving the native tool-calling loop (no agent framework) — **Groq** (hosted, `openai/gpt-oss-120b`) by default, with an **Ollama** backend (local or Ollama Cloud) as a drop‑in offline fallback via the same wire format, **SQLite** (loaded from the workbook at startup) for structured data, **in‑memory BM25** over section‑chunked documents for retrieval, and a **vanilla HTML/JS chat page with a tool‑activity trace and a confirmation card**.
 
+```
+                    ┌──────────────────────────────────────────────────────┐
+  Browser (SPA)     │  FastAPI  (app/main.py)                                │
+  ┌────────────┐    │  • POST /session  → server-issued token  (auth.py)    │
+  │ chat +     │◀──▶│  • POST /chat, /confirm                                │
+  │ tool trace │    │  • GET  /proactive, /audit   (staff-only)              │
+  │ feed+audit │    └───────────────┬───────────────────────────────────────┘
+  └────────────┘                    │  AuthContext (role + account scope)
+                                     ▼
+                     ┌───────────────────────────────────────┐
+                     │  Orchestrator  (app/agent.py)          │
+                     │  native tool loop · confirmation gate  │
+                     │  · grounding self-check (verify.py)    │
+                     └───────┬───────────────────────┬────────┘
+                    tool calls│                       │final answer + trust verdict
+                             ▼                        ▼
+   ┌──────────────────────────────────────────┐   (abstain → auto-escalate if ungrounded)
+   │  Tool layer  (app/tools.py)  ┄ AuthContext │
+   │  every tool re-scoped server-side          │
+   ├────────────────────────────────────────────┤
+   │ search_documents → BM25 + authority tiers  │──▶ DocIndex (ingest.py): 6 PDFs, section chunks
+   │ lookup_data      → scoped SQL              │──▶ SQLite: accounts/orders/tickets (from .xlsx)
+   │ compute_policy_* → deterministic calc      │──▶ reliability.py: resolved terms + snapshot time
+   │ create_escalation/update_ticket/…          │──▶ state store (SQLite / Postgres) + audit_log
+   │   (state-changing → preview → confirm)      │
+   └────────────────────────────────────────────┘
+```
+
 ## 2. Agent design
 
 A single orchestrating agent driving the model's native tool-calling loop:
@@ -25,6 +53,18 @@ The system prompt encodes: the snapshot time, the source-precedence rule, the es
 **Why no framework (LangChain/LlamaIndex):** the corpus is six short documents and the data is ~20 rows. A framework would add dependencies and indirection without buying anything. The native OpenAI-compatible tool loop gives full control over the two things that actually matter here — the confirmation gate and access scoping — which are awkward to bolt onto a generic agent runner.
 
 **Why an OpenAI-compatible client (Groq / Ollama):** both backends speak the same wire format, so one thin adapter (`app/llm.py`) covers a fast hosted default (Groq) and a zero-cost offline path (Ollama, local or Ollama Cloud) by swapping only a base URL and model name. Groq additionally supports multiple API keys with round-robin load-spreading and automatic fail-over on rate limits, so one throttled key never takes the app down.
+
+### 2.1 Worked multi-step trace (Requirement 5)
+
+A single question routinely fans out across all three read/compute tools before the agent commits to an answer. For *"Can Northstar cancel ORD-1001 without a cancellation fee?"* (customer session, scoped to ACCT-001):
+
+1. **`lookup_data(orders, {order_id: "ORD-1001"})`** → row is returned *only because* the caller's scope is ACCT-001; status `BOOKED`, booked 2h before the cancellation request.
+2. **`search_documents("cancellation fee policy")`** → SOP v4 §1 (tier 3: INR 250 after a 30-min window) **and** the Northstar agreement §2 (tier 4: fee waived on any pre-pickup BOOKED shipment). The deprecated v2 policy is not retrieved.
+3. **`compute_policy_outcome(cancellation, order_id="ORD-1001")`** → resolves terms (tier-4 agreement overrides tier-3 SOP) against the order and the snapshot time → `{cancellable: true, fee_inr: 0, reason: "agreement waives fee (Northstar §2)"}`.
+4. **Model composes** the answer using the tool's own `reason` text, cites *Northstar agreement §2*, and does **not** restate the INR 250 from the contradicted historical ticket TKT-450.
+5. **Grounding self-check** (§5.1) verifies every claim traces to step-3's evidence → "Verified against sources"; the answer is released.
+
+The orchestrator caps this at `MAX_STEPS` and stops early on an escalation, missing data, or an unsupported exception. The same shape handles the service-credit example (`lookup_data` → `search_documents` → `compute_policy_outcome(service_credit)` → decide whether an escalation is warranted).
 
 ## 3. Tool design
 
@@ -102,11 +142,17 @@ A single-page chat UI served by FastAPI: an animated **tool-activity trace** sho
 
 ## 9. Major technical trade-offs
 
-- **BM25 over a vector DB** — right-sized for six short docs; reliability metadata matters more than semantic recall here. Vector search is the documented scale path.
-- **SQLite in-memory over a hosted DB** — the data is static and tiny; SQLite gives clean scoping and auditable calculations with zero ops.
-- **Deterministic calculators over model arithmetic** — money and SLA decisions are computed in code so they are correct, testable, and reproducible; the model orchestrates and explains but does not do the math that drives an action.
-- **No agent framework** — the native tool loop keeps the confirmation gate and access scoping explicit and under our control.
-- **Confirmation enforced in orchestration, not prompt** — the safety guarantee cannot be defeated by the model forgetting to ask.
+Each decision recorded as *choice → the alternative I rejected → why*, so the reasoning (not just the outcome) is visible:
+
+| Decision | Alternative rejected | Why this choice |
+|---|---|---|
+| **BM25 + authority metadata** for retrieval | Vector DB / embeddings | Six short docs where *reliability metadata* (which source wins) matters more than semantic recall. Embeddings would add ops and obscure precedence for zero accuracy gain at this size. Vector search is the documented scale path. |
+| **In-memory SQLite** for structured data | Hosted Postgres from day one | Data is static and tiny; SQLite makes access-scoping a clean `WHERE` clause and calculations auditable with zero ops. The state store already swaps to Postgres/Supabase via `DATABASE_URL` when persistence is needed. |
+| **Deterministic calculators** for fees/credits/SLA | Let the model do the arithmetic | The money-losing failure is a plausible-but-wrong number. Code makes it correct, testable, reproducible; the model only explains the result. |
+| **Native tool loop**, no agent framework | LangChain / LlamaIndex | The two things that must be exactly right — the confirmation gate and access scoping — are awkward to bolt onto a generic runner. ~150 lines keeps them explicit and under test. |
+| **Confirmation enforced in the orchestrator** | Trust a prompt instruction to "ask first" | A safety guarantee that depends on the model remembering is not a guarantee. The gate intercepts the tool call regardless of what the model does. |
+| **Grounding check gates the answer** (abstain on fail) | Show a hedged answer with a disclaimer | For a financial agent, a withheld answer + human handoff beats a confident-sounding wrong one. Trust becomes a measured property, not a caveat. |
+| **Deterministic proactive feed** (rules + bigram clusters) | An LLM/anomaly model over tickets | Explainability and precision: every flagged item states *why*, and a feed that cries wolf gets muted. LLM summarisation is a later enhancement, not the detector. |
 
 ## 10. Production hardening
 

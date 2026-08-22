@@ -24,7 +24,8 @@ deprecated documents, computes money/SLA decisions **deterministically in code**
 **explicit confirmation** before any state-changing action, and runs an **answer-grounding self-check**
 that flags any answer whose claims aren't backed by the retrieved evidence.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and [PRODUCT.md](PRODUCT.md) for the product note.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the design, [PRODUCT.md](PRODUCT.md) for the product note,
+and [DEMO_SCRIPT.md](DEMO_SCRIPT.md) for the ~5-minute demo walkthrough.
 
 ## Tools the agent chooses between
 
