@@ -8,3 +8,7 @@ resp_*.json
 r[0-9]*.json
 s1*.json
 .DS_Store
+
+# Supabase CLI local artifacts (project ref / branch state — not for VCS)
+supabase/.temp/
+supabase/.branches/
