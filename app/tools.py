@@ -175,3 +175,24 @@ TOOL_SPECS = [
             "summary": {"type": "string"}, "due": {"type": "string"},
             "ticket_id": {"type": "string"}}, "required": ["summary"]}}},
 ]
+
+
+def _relax_optional_nulls(specs):
+    """Let optional params accept null. Models often emit `null` for an optional field,
+    and strict tool-call validators (e.g. Groq) reject null against a plain "string"
+    type, failing the whole turn. Widening optional types to include "null" avoids it."""
+    for s in specs:
+        params = s["function"].get("parameters", {})
+        required = set(params.get("required", []))
+        for name, prop in params.get("properties", {}).items():
+            if name in required:
+                continue
+            t = prop.get("type")
+            if isinstance(t, str) and t != "null":
+                prop["type"] = [t, "null"]
+            if "enum" in prop and None not in prop["enum"]:
+                prop["enum"] = prop["enum"] + [None]
+    return specs
+
+
+TOOL_SPECS = _relax_optional_nulls(TOOL_SPECS)

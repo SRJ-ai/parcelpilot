@@ -235,6 +235,7 @@ function md(src) {
   const inline = s => esc(s)
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/【[^】]*[{[][^】]*】/g, "")                    // drop broken tool-index citations
     .replace(/【([^】]+)】/g, '<span class="cite">$1</span>');
   const cells = r => r.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
   const out = []; let i = 0;

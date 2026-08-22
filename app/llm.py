@@ -43,10 +43,12 @@ def _clients():
 
 
 def chat(messages, tools):
-    kwargs = dict(messages=messages, tools=tools, tool_choice="auto", temperature=0.2)
+    kwargs = dict(messages=messages, tools=tools, tool_choice="auto", temperature=0.0)
 
     if os.getenv("LLM_PROVIDER", "groq").lower() == "ollama":
-        c = OpenAI(base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"), api_key="ollama")
+        # OLLAMA_API_KEY is the bearer for hosted Ollama Cloud; "ollama" is fine for local.
+        c = OpenAI(base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+                   api_key=os.getenv("OLLAMA_API_KEY", "ollama"))
         return c.chat.completions.create(model=os.getenv("OLLAMA_MODEL", "qwen2.5"), **kwargs)
 
     global _rr
