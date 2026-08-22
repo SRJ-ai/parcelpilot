@@ -135,12 +135,21 @@ async def gate(request: Request, call_next):
         obs.event("http", method=request.method, path=path, status=resp.status_code, ms=round(ms))
     resp.headers["X-Request-ID"] = rid
     resp.headers["X-Content-Type-Options"] = "nosniff"
-    resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "no-referrer"
-    resp.headers["Content-Security-Policy"] = (
-        "default-src 'self'; style-src 'self' 'unsafe-inline'; "
-        "script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
-    )
+    if path.startswith("/document/"):
+        # PDFs are shown in the in-app viewer (same-origin iframe): allow self-framing.
+        resp.headers["X-Frame-Options"] = "SAMEORIGIN"
+        resp.headers["Content-Security-Policy"] = (
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
+            "frame-ancestors 'self'"
+        )
+    else:
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["Content-Security-Policy"] = (
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
+        )
     return resp
 
 

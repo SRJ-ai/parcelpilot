@@ -105,3 +105,16 @@ def test_health_and_security_headers(client):
     r = client.get("/health")
     assert r.status_code == 200 and r.json()["status"] == "ok"
     assert r.headers.get("X-Content-Type-Options") == "nosniff"
+
+
+def test_document_framable_in_app_but_shell_denied(client):
+    # The PDF viewer embeds /document in a same-origin iframe: it must allow self-framing.
+    tok = login(client, "northstar")
+    doc = client.get(f"/document/05?token={tok}")
+    assert doc.status_code == 200
+    assert doc.headers.get("X-Frame-Options") == "SAMEORIGIN"
+    assert "frame-ancestors 'self'" in doc.headers.get("Content-Security-Policy", "")
+    # every other surface stays clickjacking-proof
+    shell = client.get("/")
+    assert shell.headers.get("X-Frame-Options") == "DENY"
+    assert "frame-ancestors" not in shell.headers.get("Content-Security-Policy", "")
