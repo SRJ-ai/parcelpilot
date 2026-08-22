@@ -31,5 +31,6 @@ jobs:
             sudo git pull --ff-only
             sudo /root/.local/bin/uv sync
             sudo systemctl restart parcelpilot
-            for i in $(seq 1 20); do sleep 3; curl -sf http://localhost/health && exit 0; done
+            # app binds 127.0.0.1:8000 behind Caddy (TLS on 443); health-check it directly
+            for i in $(seq 1 20); do sleep 3; curl -sf http://127.0.0.1:8000/health && exit 0; done
             echo "health check did not pass in time"; exit 1
